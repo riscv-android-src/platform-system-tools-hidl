@@ -30,32 +30,12 @@
 namespace android {
 
 status_t AST::emitVtsTypeDeclarations(Formatter &out) const {
-    std::set<AST *> allImportedASTs;
-    return emitVtsTypeDeclarationsHelper(out, &allImportedASTs);
-}
-
-status_t AST::emitVtsTypeDeclarationsHelper(
-        Formatter &out,
-        std::set<AST *> *allImportSet) const {
-    // First, generate vts type declaration for all imported AST.
-    for (const auto &ast : mImportedASTs) {
-        // Already processed, skip.
-        if (allImportSet->find(ast) != allImportSet->end()) {
-            continue;
-        }
-        allImportSet->insert(ast);
-        std::string ifaceName;
-        // We only care about types.hal.
-        if (!ast->isInterface(&ifaceName)) {
-            status_t status = ast->emitVtsTypeDeclarationsHelper(
-                    out, allImportSet);
-            if (status != OK) {
-                return status;
-            }
-        }
+    if (AST::isInterface()) {
+        const Interface* iface = mRootScope.getInterface();
+        return iface->emitVtsAttributeDeclaration(out);
     }
-    // Next, generate vts type declaration for the current AST.
-    for (const auto &type : mRootScope->getSubTypes()) {
+
+    for (const auto& type : mRootScope.getSubTypes()) {
         // Skip for TypeDef as it is just an alias of a defined type.
         if (type->isTypeDef()) {
             continue;
@@ -69,72 +49,54 @@ status_t AST::emitVtsTypeDeclarationsHelper(
         out.unindent();
         out << "}\n\n";
     }
+
     return OK;
 }
 
 status_t AST::generateVts(const std::string &outputPath) const {
-    std::string path = outputPath;
-    path.append(mCoordinator->convertPackageRootToPath(mPackage));
-    path.append(mCoordinator->getPackagePath(mPackage, true /* relative */));
+    std::string baseName = AST::getBaseName();
+    const Interface *iface = AST::getInterface();
 
-    std::string ifaceName;
-    std::string baseName;
+    Formatter out = mCoordinator->getFormatter(
+        outputPath, mPackage, Coordinator::Location::GEN_OUTPUT, baseName + ".vts");
 
-    bool isInterface = true;
-    if (!AST::isInterface(&ifaceName)) {
-        baseName = "types";
-        isInterface = false;
-    } else {
-        const Interface *iface = mRootScope->getInterface();
-        baseName = iface->getBaseName();
+    if (!out.isValid()) {
+        return UNKNOWN_ERROR;
     }
-
-    path.append(baseName);
-    path.append(".vts");
-
-    CHECK(Coordinator::MakeParentHierarchy(path));
-    FILE *file = fopen(path.c_str(), "w");
-
-    if (file == NULL) {
-        return -errno;
-    }
-
-    Formatter out(file);
 
     out << "component_class: HAL_HIDL\n";
     out << "component_type_version: " << mPackage.version()
         << "\n";
     out << "component_name: \""
-        << (isInterface ? ifaceName : "types")
+        << (iface ? iface->localName() : "types")
         << "\"\n\n";
 
     out << "package: \"" << mPackage.package() << "\"\n\n";
 
-    for (const auto &item : mImportedNames) {
+    // Generate import statement for all imported interface/types.
+    std::set<FQName> allImportedNames;
+    getAllImportedNames(&allImportedNames);
+    for (const auto &name : allImportedNames) {
         // ignore IBase.
-        if (item != gIBaseFqName) {
-            out << "import: \"" << item.string() << "\"\n";
+        if (name != gIBaseFqName) {
+            out << "import: \"" << name.string() << "\"\n";
         }
     }
 
     out << "\n";
 
-    if (isInterface) {
-        const Interface *iface = mRootScope->getInterface();
+    if (isInterface()) {
+        const Interface* iface = mRootScope.getInterface();
         out << "interface: {\n";
         out.indent();
 
         std::vector<const Interface *> chain = iface->typeChain();
 
         // Generate all the attribute declarations first.
-        for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
-            const Interface *superInterface = *it;
-            status_t status = superInterface->emitVtsAttributeDeclaration(out);
-            if (status != OK) {
-                return status;
-            }
+        status_t status = emitVtsTypeDeclarations(out);
+        if (status != OK) {
+            return status;
         }
-
         // Generate all the method declarations.
         for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
             const Interface *superInterface = *it;
@@ -156,7 +118,3 @@ status_t AST::generateVts(const std::string &outputPath) const {
 }
 
 }  // namespace android
-
-
-
-

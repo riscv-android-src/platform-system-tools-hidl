@@ -1,3 +1,19 @@
+/*
+ * Copyright (C) 2017 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 //#define LOG_NDEBUG 0
 #define LOG_TAG "hidl_test_java_native"
 
@@ -5,6 +21,8 @@
 
 #include <android/hardware/tests/baz/1.0/IBaz.h>
 
+#include <hidl/LegacySupport.h>
+#include <hidl/ServiceManagement.h>
 #include <gtest/gtest.h>
 
 #include <hidl/HidlTransportSupport.h>
@@ -17,8 +35,7 @@ using ::android::hardware::tests::baz::V1_0::IBazCallback;
 using ::android::hardware::hidl_array;
 using ::android::hardware::hidl_vec;
 using ::android::hardware::hidl_string;
-using ::android::hardware::configureRpcThreadpool;
-using ::android::hardware::joinRpcThreadpool;
+using ::android::hardware::defaultPassthroughServiceImplementation;
 using ::android::hardware::Return;
 using ::android::hardware::Void;
 
@@ -40,569 +57,7 @@ Return<void> BazCallback::hey() {
     return Void();
 }
 
-struct Baz : public IBaz {
-    Return<void> someBaseMethod() override;
-
-    Return<void> someOtherBaseMethod(
-            const IBaz::Foo &foo, someOtherBaseMethod_cb _hidl_cb) override;
-
-    Return<void> someMethodWithFooArrays(
-            const hidl_array<IBaz::Foo, 2> &fooInput,
-            someMethodWithFooArrays_cb _hidl_cb) override;
-
-    Return<void> someMethodWithFooVectors(
-            const hidl_vec<IBaz::Foo> &fooInput,
-            someMethodWithFooVectors_cb _hidl_cb) override;
-
-    Return<void> someMethodWithVectorOfArray(
-            const IBase::VectorOfArray &in,
-            someMethodWithVectorOfArray_cb _hidl_cb) override;
-
-    Return<void> someMethodTakingAVectorOfArray(
-            const hidl_vec<hidl_array<uint8_t, 6> > &in,
-            someMethodTakingAVectorOfArray_cb _hidl_cb) override;
-
-    Return<void> transpose(
-            const IBase::StringMatrix5x3 &in,
-            transpose_cb _hidl_cb) override;
-
-    Return<void> transpose2(
-            const hidl_array<hidl_string, 5, 3> &in,
-            transpose2_cb _hidl_cb) override;
-
-    Return<bool> someBoolMethod(bool x) override;
-
-    Return<void> someBoolArrayMethod(
-            const hidl_array<bool, 3> &x,
-            someBoolArrayMethod_cb _hidl_cb) override;
-
-    Return<void> someBoolVectorMethod(
-            const hidl_vec<bool> &x, someBoolVectorMethod_cb _hidl_cb) override;
-
-    Return<void> doSomethingElse(
-            const hidl_array<int32_t, 15> &param,
-            doSomethingElse_cb _hidl_cb) override;
-
-    Return<void> doThis(float param) override;
-
-    Return<int32_t> doThatAndReturnSomething(int64_t param) override;
-
-    Return<double> doQuiteABit(
-            int32_t a,
-            int64_t b,
-            float c,
-            double d) override;
-
-    Return<void> doStuffAndReturnAString(
-            doStuffAndReturnAString_cb _hidl_cb) override;
-
-    Return<void> mapThisVector(
-            const hidl_vec<int32_t>& param, mapThisVector_cb _hidl_cb) override;
-
-    Return<void> callMe(const sp<IBazCallback>& cb) override;
-
-    Return<void> callMeLater(const sp<IBazCallback>& cb) override;
-    Return<void> iAmFreeNow() override;
-    Return<void> dieNow() override;
-
-    Return<IBaz::SomeEnum> useAnEnum(IBaz::SomeEnum zzz) override;
-
-    Return<void> haveSomeStrings(
-            const hidl_array<hidl_string, 3> &array,
-            haveSomeStrings_cb _hidl_cb) override;
-
-    Return<void> haveAStringVec(
-            const hidl_vec<hidl_string>& vector,
-            haveAStringVec_cb _hidl_cb) override;
-
-    Return<void> returnABunchOfStrings(returnABunchOfStrings_cb _hidl_cb) override;
-
-    Return<void> takeAMask(IBase::BitField bf, uint8_t first,
-            const IBase::MyMask& second, uint8_t third, takeAMask_cb _hidl_cb) override;
-
-    Return<uint8_t> returnABitField() override;
-
-    Return<uint32_t> size(uint32_t size) override;
-
-private:
-    sp<IBazCallback> mStoredCallback;
-};
-
-Return<void> Baz::someBaseMethod() {
-    LOG(INFO) << "Baz::someBaseMethod";
-
-    return Void();
-}
-
 using std::to_string;
-
-static std::string to_string(const IBaz::Foo::Bar &bar);
-static std::string to_string(const IBaz::Foo &foo);
-static std::string to_string(const hidl_string &s);
-static std::string to_string(bool x);
-static std::string to_string(const IBase::StringMatrix5x3 &M);
-static std::string to_string(const IBase::StringMatrix3x5 &M);
-
-template<typename T, size_t SIZE>
-static std::string to_string(const hidl_array<T, SIZE> &array);
-
-template<size_t SIZE>
-static std::string to_string(const hidl_array<uint8_t, SIZE> &array);
-
-template<typename T>
-static std::string to_string(const hidl_vec<T> &vec) {
-    std::string out;
-    out = "[";
-    for (size_t i = 0; i < vec.size(); ++i) {
-        if (i > 0) {
-            out += ", ";
-        }
-        out += to_string(vec[i]);
-    }
-    out += "]";
-
-    return out;
-}
-
-template<typename T, size_t SIZE>
-static std::string to_string(const hidl_array<T, SIZE> &array) {
-    std::string out;
-    out = "[";
-    for (size_t i = 0; i < SIZE; ++i) {
-        if (i > 0) {
-            out += ", ";
-        }
-        out += to_string(array[i]);
-    }
-    out += "]";
-
-    return out;
-}
-
-template<size_t SIZE>
-static std::string to_string(const hidl_array<uint8_t, SIZE> &array) {
-    std::string out;
-    for (size_t i = 0; i < SIZE; ++i) {
-        if (i > 0) {
-            out += ":";
-        }
-
-        char tmp[3];
-        sprintf(tmp, "%02x", array[i]);
-
-        out += tmp;
-    }
-
-    return out;
-}
-
-template<typename T, size_t SIZE1, size_t SIZE2>
-static std::string to_string(const hidl_array<T, SIZE1, SIZE2> &array) {
-    std::string out;
-    out = "[";
-    for (size_t i = 0; i < SIZE1; ++i) {
-        if (i > 0) {
-            out += ", ";
-        }
-
-        out += "[";
-        for (size_t j = 0; j < SIZE2; ++j) {
-            if (j > 0) {
-                out += ", ";
-            }
-
-            out += to_string(array[i][j]);
-        }
-        out += "]";
-    }
-    out += "]";
-
-    return out;
-}
-
-static std::string to_string(bool x) {
-    return x ? "true" : "false";
-}
-
-static std::string to_string(const hidl_string &s) {
-    return std::string("'") + s.c_str() + "'";
-}
-
-static std::string to_string(const IBaz::Foo::Bar &bar) {
-    std::string out;
-    out = "Bar(";
-    out += "z = " + to_string(bar.z) + ", ";
-    out += "s = '" + std::string(bar.s.c_str()) + "'";
-    out += ")";
-
-    return out;
-}
-
-static std::string to_string(const IBaz::Foo &foo) {
-    std::string out;
-    out = "Foo(";
-    out += "x = " + to_string(foo.x) + ", ";
-    out += "y = " + to_string(foo.y) + ", ";
-    out += "aaa = " + to_string(foo.aaa);
-    out += ")";
-
-    return out;
-}
-
-static std::string to_string(const IBase::StringMatrix5x3 &M) {
-    return to_string(M.s);
-}
-
-static std::string to_string(const IBase::StringMatrix3x5 &M) {
-    return to_string(M.s);
-}
-
-Return<void> Baz::someOtherBaseMethod(
-        const IBaz::Foo &foo, someOtherBaseMethod_cb _hidl_cb) {
-    LOG(INFO) << "Baz::someOtherBaseMethod "
-              << to_string(foo);
-
-    _hidl_cb(foo);
-
-    return Void();
-}
-
-Return<void> Baz::someMethodWithFooArrays(
-        const hidl_array<IBaz::Foo, 2> &fooInput,
-        someMethodWithFooArrays_cb _hidl_cb) {
-    LOG(INFO) << "Baz::someMethodWithFooArrays "
-              << to_string(fooInput);
-
-    hidl_array<IBaz::Foo, 2> fooOutput;
-    fooOutput[0] = fooInput[1];
-    fooOutput[1] = fooInput[0];
-
-    _hidl_cb(fooOutput);
-
-    return Void();
-}
-
-Return<void> Baz::someMethodWithFooVectors(
-        const hidl_vec<IBaz::Foo> &fooInput,
-        someMethodWithFooVectors_cb _hidl_cb) {
-    LOG(INFO) << "Baz::someMethodWithFooVectors "
-              << to_string(fooInput);
-
-    hidl_vec<IBaz::Foo> fooOutput;
-    fooOutput.resize(2);
-    fooOutput[0] = fooInput[1];
-    fooOutput[1] = fooInput[0];
-
-    _hidl_cb(fooOutput);
-
-    return Void();
-}
-
-static std::string VectorOfArray_to_string(const IBase::VectorOfArray &in) {
-    std::string out;
-    out += "VectorOfArray(";
-
-    for (size_t i = 0; i < in.addresses.size(); ++i) {
-        if (i > 0) {
-            out += ", ";
-        }
-
-        for (size_t j = 0; j < 6; ++j) {
-            if (j > 0) {
-                out += ":";
-            }
-
-            char tmp[3];
-            sprintf(tmp, "%02x", in.addresses[i][j]);
-
-            out += tmp;
-        }
-    }
-
-    out += ")";
-
-    return out;
-}
-
-Return<void> Baz::someMethodWithVectorOfArray(
-        const IBase::VectorOfArray &in,
-        someMethodWithVectorOfArray_cb _hidl_cb) {
-    LOG(INFO) << "Baz::someMethodWithVectorOfArray "
-              << VectorOfArray_to_string(in);
-
-    IBase::VectorOfArray out;
-
-    const size_t n = in.addresses.size();
-    out.addresses.resize(n);
-
-    for (size_t i = 0; i < n; ++i) {
-        out.addresses[i] = in.addresses[n - 1 - i];
-    }
-
-    _hidl_cb(out);
-
-    return Void();
-}
-
-Return<void> Baz::someMethodTakingAVectorOfArray(
-        const hidl_vec<hidl_array<uint8_t, 6> > &in,
-        someMethodTakingAVectorOfArray_cb _hidl_cb) {
-    LOG(INFO) << "Baz::someMethodTakingAVectorOfArray "
-              << to_string(in);
-
-    const size_t n = in.size();
-
-    hidl_vec<hidl_array<uint8_t, 6> > out;
-    out.resize(n);
-
-    for (size_t i = 0; i < n; ++i) {
-        out[i] = in[n - 1 - i];
-    }
-
-    _hidl_cb(out);
-
-    return Void();
-}
-
-Return<void> Baz::transpose(
-        const IBase::StringMatrix5x3 &in, transpose_cb _hidl_cb) {
-    LOG(INFO) << "Baz::transpose " << to_string(in);
-
-    IBase::StringMatrix3x5 out;
-    for (size_t i = 0; i < 3; ++i) {
-        for (size_t j = 0; j < 5; ++j) {
-            out.s[i][j] = in.s[j][i];
-        }
-    }
-
-    _hidl_cb(out);
-
-    return Void();
-}
-
-Return<void> Baz::transpose2(
-        const hidl_array<hidl_string, 5, 3> &in, transpose2_cb _hidl_cb) {
-    LOG(INFO) << "Baz::transpose2 " << to_string(in);
-
-    hidl_array<hidl_string, 3, 5> out;
-    for (size_t i = 0; i < 3; ++i) {
-        for (size_t j = 0; j < 5; ++j) {
-            out[i][j] = in[j][i];
-        }
-    }
-
-    _hidl_cb(out);
-
-    return Void();
-}
-
-Return<bool> Baz::someBoolMethod(bool x) {
-    LOG(INFO) << "Baz::someBoolMethod(" << to_string(x) << ")";
-
-    return !x;
-}
-
-Return<void> Baz::someBoolArrayMethod(
-        const hidl_array<bool, 3> &x, someBoolArrayMethod_cb _hidl_cb) {
-    LOG(INFO) << "Baz::someBoolArrayMethod("
-        << to_string(x[0])
-        << ", "
-        << to_string(x[1])
-        << ", "
-        << to_string(x[2])
-        << ")";
-
-    hidl_array<bool, 4> out;
-    out[0] = !x[0];
-    out[1] = !x[1];
-    out[2] = !x[2];
-    out[3] = true;
-
-    _hidl_cb(out);
-
-    return Void();
-}
-
-Return<void> Baz::someBoolVectorMethod(
-        const hidl_vec<bool> &x, someBoolVectorMethod_cb _hidl_cb) {
-    LOG(INFO) << "Baz::someBoolVectorMethod(" << to_string(x) << ")";
-
-    hidl_vec<bool> out;
-    out.resize(x.size());
-    for (size_t i = 0; i < x.size(); ++i) {
-        out[i] = !x[i];
-    }
-
-    _hidl_cb(out);
-
-    return Void();
-}
-
-Return<void> Baz::doSomethingElse(
-        const hidl_array<int32_t, 15> &param, doSomethingElse_cb _hidl_cb) {
-    LOG(INFO) << "Baz::doSomethingElse(...)";
-
-    hidl_array<int32_t, 32> result;
-    for (size_t i = 0; i < 15; ++i) {
-        result[i] = 2 * param[i];
-        result[15 + i] = param[i];
-    }
-    result[30] = 1;
-    result[31] = 2;
-
-    _hidl_cb(result);
-
-    return Void();
-}
-
-Return<void> Baz::doThis(float param) {
-    LOG(INFO) << "Baz::doThis(" << param << ")";
-
-    return Void();
-}
-
-Return<int32_t> Baz::doThatAndReturnSomething(int64_t param) {
-    LOG(INFO) << "Baz::doThatAndReturnSomething(" << param << ")";
-
-    return 666;
-}
-
-Return<double> Baz::doQuiteABit(
-        int32_t a,
-        int64_t b,
-        float c,
-        double d) {
-    LOG(INFO) << "Baz::doQuiteABit("
-              << a
-              << ", "
-              << b
-              << ", "
-              << c
-              << ", "
-              << d
-              << ")";
-
-    return 666.5;
-}
-
-Return<void> Baz::doStuffAndReturnAString(
-        doStuffAndReturnAString_cb _hidl_cb) {
-    LOG(INFO) << "doStuffAndReturnAString";
-
-    hidl_string s;
-    s = "Hello, world!";
-
-    _hidl_cb(s);
-
-    return Void();
-}
-
-Return<void> Baz::mapThisVector(
-        const hidl_vec<int32_t>& param, mapThisVector_cb _hidl_cb) {
-    LOG(INFO) << "mapThisVector";
-
-    hidl_vec<int32_t> out;
-    out.resize(param.size());
-    for (size_t i = 0; i < param.size(); ++i) {
-        out[i] = param[i] * 2;
-    }
-
-    _hidl_cb(out);
-
-    return Void();
-}
-
-Return<void> Baz::callMe(const sp<IBazCallback>& cb) {
-    LOG(INFO) << "callMe " << cb.get();
-
-    if (cb != NULL) {
-        sp<IBazCallback> my_cb = new BazCallback;
-        cb->heyItsMe(my_cb);
-    }
-
-    return Void();
-}
-
-Return<void> Baz::callMeLater(const sp<IBazCallback>& cb) {
-    LOG(INFO) << "callMeLater " << cb.get();
-
-    mStoredCallback = cb;
-
-    return Void();
-}
-
-Return<void> Baz::iAmFreeNow() {
-    if (mStoredCallback != nullptr) {
-        mStoredCallback->hey();
-    }
-    return Void();
-}
-
-Return<void> Baz::dieNow() {
-    exit(1);
-    return Void();
-}
-
-Return<IBaz::SomeEnum> Baz::useAnEnum(IBaz::SomeEnum zzz) {
-    LOG(INFO) << "useAnEnum " << (int)zzz;
-
-    return SomeEnum::goober;
-}
-
-Return<void> Baz::haveSomeStrings(
-        const hidl_array<hidl_string, 3> &array, haveSomeStrings_cb _hidl_cb) {
-    LOG(INFO) << "haveSomeStrings("
-              << to_string(array)
-              << ")";
-
-    hidl_array<hidl_string, 2> result;
-    result[0] = "Hello";
-    result[1] = "World";
-
-    _hidl_cb(result);
-
-    return Void();
-}
-
-Return<void> Baz::haveAStringVec(
-        const hidl_vec<hidl_string>& vector,
-        haveAStringVec_cb _hidl_cb) {
-    LOG(INFO) << "haveAStringVec(" << to_string(vector) << ")";
-
-    hidl_vec<hidl_string> result;
-    result.resize(2);
-
-    result[0] = "Hello";
-    result[1] = "World";
-
-    _hidl_cb(result);
-
-    return Void();
-}
-
-Return<void> Baz::returnABunchOfStrings(returnABunchOfStrings_cb _hidl_cb) {
-    hidl_string eins; eins = "Eins";
-    hidl_string zwei; zwei = "Zwei";
-    hidl_string drei; drei = "Drei";
-    _hidl_cb(eins, zwei, drei);
-
-    return Void();
-}
-
-
-Return<void> Baz::takeAMask(IBase::BitField bf, uint8_t first,
-        const IBase::MyMask& second, uint8_t third, takeAMask_cb _hidl_cb) {
-    _hidl_cb(bf, bf | first, second.value & bf, (bf | bf) & third);
-    return Void();
-}
-
-Return<uint8_t> Baz::returnABitField() {
-    return 0;
-}
-
-Return<uint32_t> Baz::size(uint32_t size) {
-    return size;
-}
 
 static void usage(const char *me) {
     fprintf(stderr, "%s [-c]lient | [-s]erver\n", me);
@@ -622,9 +77,13 @@ struct HidlTest : public ::testing::Test {
     void SetUp() override {
         using namespace ::android::hardware;
 
+        ::android::hardware::details::waitForHwService(
+                IBaz::descriptor, "baz");
+
         baz = IBaz::getService("baz");
 
         CHECK(baz != NULL);
+        CHECK(baz->isRemote());
     }
 
     void TearDown() override {
@@ -632,8 +91,14 @@ struct HidlTest : public ::testing::Test {
 };
 
 template <typename T>
-static void EXPECT_OK(::android::hardware::Return<T> ret) {
+static void EXPECT_OK(const ::android::hardware::Return<T> &ret) {
     EXPECT_TRUE(ret.isOk());
+}
+
+TEST_F(HidlTest, GetDescriptorTest) {
+    EXPECT_OK(baz->interfaceDescriptor([&] (const auto &desc) {
+        EXPECT_EQ(desc, IBaz::descriptor);
+    }));
 }
 
 TEST_F(HidlTest, BazSomeBaseMethodTest) {
@@ -644,7 +109,8 @@ TEST_F(HidlTest, BazSomeOtherBaseMethodTest) {
     IBase::Foo foo;
     foo.x = 1;
     foo.y.z = 2.5;
-    foo.y.s = "Hello, world";
+    // A valid UTF-8 string
+    foo.y.s = "Hello, world, \x46\x6F\x6F\x20\xC2\xA9\x20\x62\x61\x72\x20\xF0\x9D\x8C\x86\x20\x54\x72\x65\x62\x6C\x65\x20\xE2\x98\x83\x20\x72\x6F\x63\x6B\x73";
 
     foo.aaa.resize(5);
     for (size_t i = 0; i < foo.aaa.size(); ++i) {
@@ -656,16 +122,11 @@ TEST_F(HidlTest, BazSomeOtherBaseMethodTest) {
             baz->someOtherBaseMethod(
                 foo,
                 [&](const auto &result) {
-                    EXPECT_EQ(
-                        to_string(result),
-                        "Foo(x = 1, "
-                            "y = Bar(z = 2.500000, s = 'Hello, world'), "
-                            "aaa = [Bar(z = 1.000000, s = 'Hello, world 0'), "
-                                   "Bar(z = 1.010000, s = 'Hello, world 1'), "
-                                   "Bar(z = 1.020000, s = 'Hello, world 2'), "
-                                   "Bar(z = 1.030000, s = 'Hello, world 3'), "
-                                   "Bar(z = 1.040000, s = 'Hello, world 4')])");
-                }));
+                    // Strings should have the same size as they did before
+                    // marshaling. b/35038064
+                    EXPECT_EQ(result.y.s.size(), foo.y.s.size());
+                    EXPECT_EQ(foo, result);
+               }));
 }
 
 TEST_F(HidlTest, BazSomeMethodWithFooArraysTest) {
@@ -691,25 +152,16 @@ TEST_F(HidlTest, BazSomeMethodWithFooArraysTest) {
         foo[1].aaa[i].s = ("Alea iacta est: " + std::to_string(i)).c_str();
     }
 
+    hidl_array<IBaz::Foo, 2> fooExpectedOutput;
+    fooExpectedOutput[0] = foo[1];
+    fooExpectedOutput[1] = foo[0];
+
     EXPECT_OK(
             baz->someMethodWithFooArrays(
                 foo,
                 [&](const auto &result) {
-                    EXPECT_EQ(
-                        to_string(result),
-                        "[Foo(x = 2, "
-                             "y = Bar(z = -2.500000, s = 'Morituri te salutant'), "
-                             "aaa = [Bar(z = 2.000000, s = 'Alea iacta est: 0'), "
-                                    "Bar(z = 1.990000, s = 'Alea iacta est: 1'), "
-                                    "Bar(z = 1.980000, s = 'Alea iacta est: 2')]), "
-                        "Foo(x = 1, "
-                            "y = Bar(z = 2.500000, s = 'Hello, world'), "
-                            "aaa = [Bar(z = 1.000000, s = 'Hello, world 0'), "
-                                   "Bar(z = 1.010000, s = 'Hello, world 1'), "
-                                   "Bar(z = 1.020000, s = 'Hello, world 2'), "
-                                   "Bar(z = 1.030000, s = 'Hello, world 3'), "
-                                   "Bar(z = 1.040000, s = 'Hello, world 4')])]");
-                }));
+                    EXPECT_EQ(result, fooExpectedOutput);
+               }));
 }
 
 TEST_F(HidlTest, BazSomeMethodWithFooVectorsTest) {
@@ -736,35 +188,31 @@ TEST_F(HidlTest, BazSomeMethodWithFooVectorsTest) {
         foo[1].aaa[i].s = ("Alea iacta est: " + std::to_string(i)).c_str();
     }
 
+    hidl_vec<IBaz::Foo> fooExpectedOutput;
+    fooExpectedOutput.resize(2);
+    fooExpectedOutput[0] = foo[1];
+    fooExpectedOutput[1] = foo[0];
+
     EXPECT_OK(
             baz->someMethodWithFooVectors(
                 foo,
                 [&](const auto &result) {
-                    EXPECT_EQ(
-                        to_string(result),
-                        "[Foo(x = 2, "
-                             "y = Bar(z = -2.500000, s = 'Morituri te salutant'), "
-                             "aaa = [Bar(z = 2.000000, s = 'Alea iacta est: 0'), "
-                                    "Bar(z = 1.990000, s = 'Alea iacta est: 1'), "
-                                    "Bar(z = 1.980000, s = 'Alea iacta est: 2')]), "
-                        "Foo(x = 1, "
-                            "y = Bar(z = 2.500000, s = 'Hello, world'), "
-                            "aaa = [Bar(z = 1.000000, s = 'Hello, world 0'), "
-                                   "Bar(z = 1.010000, s = 'Hello, world 1'), "
-                                   "Bar(z = 1.020000, s = 'Hello, world 2'), "
-                                   "Bar(z = 1.030000, s = 'Hello, world 3'), "
-                                   "Bar(z = 1.040000, s = 'Hello, world 4')])]");
+                    EXPECT_EQ(result, fooExpectedOutput);
                 }));
 }
 
 TEST_F(HidlTest, BazSomeMethodWithVectorOfArray) {
-    IBase::VectorOfArray in;
+    IBase::VectorOfArray in, expectedOut;
     in.addresses.resize(3);
+    expectedOut.addresses.resize(3);
 
     size_t k = 0;
-    for (size_t i = 0; i < in.addresses.size(); ++i) {
+    const size_t n = in.addresses.size();
+
+    for (size_t i = 0; i < n; ++i) {
         for (size_t j = 0; j < 6; ++j, ++k) {
             in.addresses[i][j] = k;
+            expectedOut.addresses[n - 1 - i][j] = k;
         }
     }
 
@@ -772,23 +220,21 @@ TEST_F(HidlTest, BazSomeMethodWithVectorOfArray) {
             baz->someMethodWithVectorOfArray(
                 in,
                 [&](const auto &out) {
-                    EXPECT_EQ(
-                        VectorOfArray_to_string(out),
-                        "VectorOfArray("
-                          "0c:0d:0e:0f:10:11, "
-                          "06:07:08:09:0a:0b, "
-                          "00:01:02:03:04:05)");
+                    EXPECT_EQ(expectedOut, out);
                 }));
 }
 
 TEST_F(HidlTest, BazSomeMethodTakingAVectorOfArray) {
-    hidl_vec<hidl_array<uint8_t, 6> > in;
+    hidl_vec<hidl_array<uint8_t, 6> > in, expectedOut;
     in.resize(3);
+    expectedOut.resize(3);
 
     size_t k = 0;
-    for (size_t i = 0; i < in.size(); ++i) {
+    const size_t n = in.size();
+    for (size_t i = 0; i < n; ++i) {
         for (size_t j = 0; j < 6; ++j, ++k) {
             in[i][j] = k;
+            expectedOut[n - 1 - i][j] = k;
         }
     }
 
@@ -796,9 +242,7 @@ TEST_F(HidlTest, BazSomeMethodTakingAVectorOfArray) {
             baz->someMethodTakingAVectorOfArray(
                 in,
                 [&](const auto &out) {
-                    EXPECT_EQ(
-                        to_string(out),
-                        "[0c:0d:0e:0f:10:11, 06:07:08:09:0a:0b, 00:01:02:03:04:05]");
+                    EXPECT_EQ(expectedOut, out);
                 }));
 }
 
@@ -850,48 +294,42 @@ static std::string numberToEnglish(int x) {
 
 TEST_F(HidlTest, BazTransposeTest) {
     IBase::StringMatrix5x3 in;
+    IBase::StringMatrix3x5 expectedOut;
 
     for (int i = 0; i < 5; ++i) {
         for (int j = 0; j < 3; ++j) {
-            in.s[i][j] = numberToEnglish(3 * i + j + 1).c_str();
+            in.s[i][j] = expectedOut.s[j][i] = numberToEnglish(3 * i + j + 1).c_str();
         }
     }
 
     EXPECT_OK(baz->transpose(
                 in,
                 [&](const auto &out) {
-                    EXPECT_EQ(
-                        to_string(out),
-                        "[['one', 'four', 'seven', 'ten', 'thirteen'], "
-                         "['two', 'five', 'eight', 'eleven', 'fourteen'], "
-                         "['three', 'six', 'nine', 'twelve', 'fifteen']]");
+                    EXPECT_EQ(expectedOut, out);
                 }));
 }
 
 TEST_F(HidlTest, BazTranspose2Test) {
     hidl_array<hidl_string, 5, 3> in;
+    hidl_array<hidl_string, 3, 5> expectedOut;
 
     for (int i = 0; i < 5; ++i) {
         for (int j = 0; j < 3; ++j) {
-            in[i][j] = numberToEnglish(3 * i + j + 1).c_str();
+            in[i][j] = expectedOut[j][i] = numberToEnglish(3 * i + j + 1).c_str();
         }
     }
 
     EXPECT_OK(baz->transpose2(
                 in,
                 [&](const auto &out) {
-                    EXPECT_EQ(
-                        to_string(out),
-                        "[['one', 'four', 'seven', 'ten', 'thirteen'], "
-                         "['two', 'five', 'eight', 'eleven', 'fourteen'], "
-                         "['three', 'six', 'nine', 'twelve', 'fifteen']]");
+                    EXPECT_EQ(expectedOut, out);
                 }));
 }
 
 TEST_F(HidlTest, BazSomeBoolMethodTest) {
     auto result = baz->someBoolMethod(true);
     EXPECT_OK(result);
-    EXPECT_EQ(to_string(result), "false");
+    EXPECT_EQ(result, false);
 }
 
 TEST_F(HidlTest, BazSomeBoolArrayMethodTest) {
@@ -900,29 +338,35 @@ TEST_F(HidlTest, BazSomeBoolArrayMethodTest) {
     someBoolArray[1] = false;
     someBoolArray[2] = true;
 
+    hidl_array<bool, 4> expectedOut;
+    expectedOut[0] = false;
+    expectedOut[1] = true;
+    expectedOut[2] = false;
+    expectedOut[3] = true;
+
     EXPECT_OK(
             baz->someBoolArrayMethod(
                 someBoolArray,
                 [&](const auto &result) {
-                    EXPECT_EQ(
-                        to_string(result),
-                        "[false, true, false, true]");
+                    EXPECT_EQ(expectedOut, result);
                 }));
 }
 
 TEST_F(HidlTest, BazSomeBoolVectorMethodTest) {
-    hidl_vec<bool> someBoolVector;
+    hidl_vec<bool> someBoolVector, expected;
     someBoolVector.resize(4);
+    expected.resize(4);
+
     for (size_t i = 0; i < someBoolVector.size(); ++i) {
         someBoolVector[i] = ((i & 1) == 0);
+        expected[i] = !someBoolVector[i];
     }
 
     EXPECT_OK(
             baz->someBoolVectorMethod(
                 someBoolVector,
                 [&](const auto &result) {
-                    EXPECT_EQ(
-                        to_string(result), "[false, true, false, true]");
+                    EXPECT_EQ(expected, result);
                 }));
 }
 
@@ -933,57 +377,60 @@ TEST_F(HidlTest, BazDoThisMethodTest) {
 TEST_F(HidlTest, BazDoThatAndReturnSomethingMethodTest) {
     auto result = baz->doThatAndReturnSomething(1);
     EXPECT_OK(result);
-    EXPECT_EQ(to_string(result), "666");
+    EXPECT_EQ(result, 666);
 }
 
 TEST_F(HidlTest, BazDoQuiteABitMethodTest) {
     auto result = baz->doQuiteABit(1, 2ll, 3.0f, 4.0);
 
     EXPECT_OK(result);
-    EXPECT_EQ(to_string(result), "666.500000");
+    EXPECT_EQ(result, 666.5);
 }
 
 TEST_F(HidlTest, BazDoSomethingElseMethodTest) {
     hidl_array<int32_t, 15> param;
+    hidl_array<int32_t, 32> expected;
+
     for (size_t i = 0; i < 15; ++i) {
-        param[i] = i;
+        param[i] = expected[15 + i] = i;
+        expected[i] = 2 * i;
     }
+
+    expected[30] = 1;
+    expected[31] = 2;
 
     EXPECT_OK(
             baz->doSomethingElse(
                 param,
                 [&](const auto &result) {
-                    EXPECT_EQ(
-                        to_string(result),
-                        "[0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, "
-                        "28, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, "
-                        "1, 2]");
+                    EXPECT_EQ(expected, result);
                 }));
 }
 
 TEST_F(HidlTest, BazDoStuffAndReturnAStringMethodTest) {
+    std::string expected = "Hello, world!";
     EXPECT_OK(
             baz->doStuffAndReturnAString(
                 [&](const auto &result) {
-                    EXPECT_EQ(to_string(result), "'Hello, world!'");
+                    EXPECT_EQ(expected, result);
                 }));
 }
 
 TEST_F(HidlTest, BazMapThisVectorMethodTest) {
-    hidl_vec<int32_t> vec_param;
+    hidl_vec<int32_t> vec_param, expected;
     vec_param.resize(15);
+    expected.resize(15);
+
     for (size_t i = 0; i < 15; ++i) {
         vec_param[i] = i;
+        expected[i] = 2 * i;
     }
 
     EXPECT_OK(
             baz->mapThisVector(
                 vec_param,
                 [&](const auto &result) {
-                    EXPECT_EQ(
-                        to_string(result),
-                        "[0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, "
-                        "28]");
+                    EXPECT_EQ(expected, result);
                 }));
 }
 
@@ -1009,41 +456,127 @@ TEST_F(HidlTest, BazHaveSomeStringsMethodTest) {
     string_params[1] = "two";
     string_params[2] = "three";
 
+    hidl_array<hidl_string, 2> expected;
+    expected[0] = "Hello";
+    expected[1] = "World";
+
     EXPECT_OK(
             baz->haveSomeStrings(
                 string_params,
                 [&](const auto &result) {
-                    EXPECT_EQ(to_string(result), "['Hello', 'World']");
+                    EXPECT_EQ(expected, result);
                 }));
 }
 
 TEST_F(HidlTest, BazHaveAStringVecMethodTest) {
-    hidl_vec<hidl_string> string_vec;
-    string_vec.resize(4);
-    string_vec[0] = "Uno";
-    string_vec[1] = "Dos";
-    string_vec[2] = "Tres";
-    string_vec[3] = "Cuatro";
+    hidl_vec<hidl_string> string_vec{ "Uno", "Dos", "Tres", "Cuatro" };
+    hidl_vec<hidl_string> expected{"Hello", "World"};
 
     EXPECT_OK(
             baz->haveAStringVec(
                 string_vec,
                 [&](const auto &result) {
-                    EXPECT_EQ(to_string(result), "['Hello', 'World']");
+                    EXPECT_EQ(expected, result);
                 }));
 }
 
 TEST_F(HidlTest, BazReturnABunchOfStringsMethodTest) {
+    std::string expectedA = "Eins";
+    std::string expectedB = "Zwei";
+    std::string expectedC = "Drei";
     EXPECT_OK(
             baz->returnABunchOfStrings(
                 [&](const auto &a, const auto &b, const auto &c) {
-                    EXPECT_EQ(
-                        to_string(a) + ", " + to_string(b) + ", " + to_string(c),
-                        "'Eins', 'Zwei', 'Drei'");
+                    EXPECT_EQ(a, expectedA);
+                    EXPECT_EQ(b, expectedB);
+                    EXPECT_EQ(c, expectedC);
                 }));
 }
 
+TEST_F(HidlTest, BazTestArrays) {
+    IBase::LotsOfPrimitiveArrays in;
+
+    for (size_t i = 0; i < 128; ++i) {
+        in.byte1[i] = i;
+        in.boolean1[i] = (i & 4) != 0;
+        in.double1[i] = i;
+    }
+
+    size_t k = 0;
+    for (size_t i = 0; i < 8; ++i) {
+        for (size_t j = 0; j < 128; ++j, ++k) {
+            in.byte2[i][j] = k;
+            in.boolean2[i][j] = (k & 4) != 0;
+            in.double2[i][j] = k;
+        }
+    }
+
+    size_t m = 0;
+    for (size_t i = 0; i < 8; ++i) {
+        for (size_t j = 0; j < 16; ++j) {
+            for (size_t k = 0; k < 128; ++k, ++m) {
+                in.byte3[i][j][k] = m;
+                in.boolean3[i][j][k] = (m & 4) != 0;
+                in.double3[i][j][k] = m;
+            }
+        }
+    }
+
+    EXPECT_OK(
+            baz->testArrays(in,
+                [&](const auto &out) {
+                    EXPECT_EQ(in, out);
+                }));
+}
+
+TEST_F(HidlTest, BazTestByteVecs) {
+    hidl_vec<IBase::ByteOneDim> in;
+    in.resize(8);
+
+    size_t k = 0;
+    for (size_t i = 0; i < in.size(); ++i) {
+        for (size_t j = 0; j < 128; ++j, ++k) {
+            in[i][j] = k;
+        }
+    }
+
+    EXPECT_OK(baz->testByteVecs(
+                in, [&](const auto &out) { EXPECT_EQ(in, out); }));
+}
+
+TEST_F(HidlTest, BazTestBooleanVecs) {
+    hidl_vec<IBase::BooleanOneDim> in;
+    in.resize(8);
+
+    size_t k = 0;
+    for (size_t i = 0; i < in.size(); ++i) {
+        for (size_t j = 0; j < 128; ++j, ++k) {
+            in[i][j] = (k & 4) != 0;
+        }
+    }
+
+    EXPECT_OK(baz->testBooleanVecs(
+                in, [&](const auto &out) { EXPECT_EQ(in, out); }));
+}
+
+TEST_F(HidlTest, BazTestDoubleVecs) {
+    hidl_vec<IBase::DoubleOneDim> in;
+    in.resize(8);
+
+    size_t k = 0;
+    for (size_t i = 0; i < in.size(); ++i) {
+        for (size_t j = 0; j < 128; ++j, ++k) {
+            in[i][j] = k;
+        }
+    }
+
+    EXPECT_OK(baz->testDoubleVecs(
+                in, [&](const auto &out) { EXPECT_EQ(in, out); }));
+}
+
 int main(int argc, char **argv) {
+    setenv("TREBLE_TESTING_OVERRIDE", "true", true);
+
     using namespace android::hardware;
 
     const char *me = argv[0];
@@ -1087,13 +620,8 @@ int main(int argc, char **argv) {
         ::testing::InitGoogleTest(&argc, argv);
         int status = RUN_ALL_TESTS();
         return status;
-    } else {
-        sp<Baz> baz = new Baz;
-        configureRpcThreadpool(1, true /* callerWillJoin */);
-        baz->registerAsService("baz");
-        joinRpcThreadpool();
     }
 
-    return 0;
-}
+    return defaultPassthroughServiceImplementation<IBaz>("baz");
 
+}

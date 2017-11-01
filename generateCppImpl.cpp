@@ -20,6 +20,7 @@
 #include "EnumType.h"
 #include "Interface.h"
 #include "Method.h"
+#include "Reference.h"
 #include "ScalarType.h"
 #include "Scope.h"
 
@@ -33,10 +34,10 @@
 namespace android {
 
 status_t AST::generateCppImpl(const std::string &outputPath) const {
-    status_t err = generateStubImplHeader(outputPath);
+    status_t err = generateCppImplHeader(outputPath);
 
     if (err == OK) {
-        err = generateStubImplSource(outputPath);
+        err = generateCppImplSource(outputPath);
     }
 
     return err;
@@ -62,7 +63,7 @@ status_t AST::generateStubImplMethod(Formatter &out,
     out.indent();
     out << "// TODO implement\n";
 
-    const TypedVar *elidedReturn = method->canElideCallback();
+    const NamedReference<Type>* elidedReturn = method->canElideCallback();
 
     if (elidedReturn == nullptr) {
         out << "return Void();\n";
@@ -79,29 +80,21 @@ status_t AST::generateStubImplMethod(Formatter &out,
     return OK;
 }
 
-status_t AST::generateStubImplHeader(const std::string &outputPath) const {
-    std::string ifaceName;
-    if (!AST::isInterface(&ifaceName)) {
+status_t AST::generateCppImplHeader(const std::string& outputPath) const {
+    if (!AST::isInterface()) {
         // types.hal does not get a stub header.
         return OK;
     }
 
-    const Interface *iface = mRootScope->getInterface();
-
+    const Interface* iface = mRootScope.getInterface();
     const std::string baseName = iface->getBaseName();
 
-    std::string path = outputPath;
-    path.append(baseName);
-    path.append(".h");
+    Formatter out = mCoordinator->getFormatter(outputPath, mPackage, Coordinator::Location::DIRECT,
+                                               baseName + ".h");
 
-    CHECK(Coordinator::MakeParentHierarchy(path));
-    FILE *file = fopen(path.c_str(), "w");
-
-    if (file == NULL) {
-        return -errno;
+    if (!out.isValid()) {
+        return UNKNOWN_ERROR;
     }
-
-    Formatter out(file);
 
     const std::string guard = makeHeaderGuard(baseName, false /* indicateGenerated */);
 
@@ -116,38 +109,6 @@ status_t AST::generateStubImplHeader(const std::string &outputPath) const {
     enterLeaveNamespace(out, true /* enter */);
     out << "namespace implementation {\n\n";
 
-    // this is namespace aware code and doesn't require post-processing
-    out.setNamespace("");
-
-    std::vector<const Interface *> chain = iface->typeChain();
-
-    std::set<const FQName> usedTypes{};
-
-    for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
-        const Interface *superInterface = *it;
-        superInterface->addNamedTypesToSet(usedTypes);
-    }
-
-    for (const auto &tuple : iface->allMethodsFromRoot()) {
-        const Method *method = tuple.method();
-        for(const auto & arg : method->args()) {
-            arg->type().addNamedTypesToSet(usedTypes);
-        }
-        for(const auto & results : method->results()) {
-            results->type().addNamedTypesToSet(usedTypes);
-        }
-    }
-
-    std::set<const FQName> topLevelTypes{};
-
-    for (const auto &name : usedTypes) {
-        topLevelTypes.insert(name.getTopLevelType());
-    }
-
-    for (const FQName &name : topLevelTypes) {
-        out << "using " << name.cppName() << ";\n";
-    }
-
     out << "using ::android::hardware::hidl_array;\n";
     out << "using ::android::hardware::hidl_memory;\n";
     out << "using ::android::hardware::hidl_string;\n";
@@ -161,7 +122,7 @@ status_t AST::generateStubImplHeader(const std::string &outputPath) const {
     out << "struct "
         << baseName
         << " : public "
-        << ifaceName
+        << iface->localName()
         << " {\n";
 
     out.indent();
@@ -185,10 +146,11 @@ status_t AST::generateStubImplHeader(const std::string &outputPath) const {
 
     out << "};\n\n";
 
-    out << "extern \"C\" "
-        << ifaceName
+    out << "// FIXME: most likely delete, this is only for passthrough implementations\n"
+        << "// extern \"C\" "
+        << iface->localName()
         << "* ";
-    generateFetchSymbol(out, ifaceName);
+    generateFetchSymbol(out, iface->localName());
     out << "(const char* name);\n\n";
 
     out << "}  // namespace implementation\n";
@@ -199,49 +161,45 @@ status_t AST::generateStubImplHeader(const std::string &outputPath) const {
     return OK;
 }
 
-status_t AST::generateStubImplSource(const std::string &outputPath) const {
-    std::string ifaceName;
-    if (!AST::isInterface(&ifaceName)) {
+status_t AST::generateCppImplSource(const std::string& outputPath) const {
+    if (!AST::isInterface()) {
         // types.hal does not get a stub header.
         return OK;
     }
 
-    const Interface *iface = mRootScope->getInterface();
+    const Interface* iface = mRootScope.getInterface();
     const std::string baseName = iface->getBaseName();
 
-    std::string path = outputPath;
-    path.append(baseName);
-    path.append(".cpp");
+    Formatter out = mCoordinator->getFormatter(outputPath, mPackage, Coordinator::Location::DIRECT,
+                                               baseName + ".cpp");
 
-    CHECK(Coordinator::MakeParentHierarchy(path));
-    FILE *file = fopen(path.c_str(), "w");
-
-    if (file == NULL) {
-        return -errno;
+    if (!out.isValid()) {
+        return UNKNOWN_ERROR;
     }
-
-    Formatter out(file);
 
     out << "#include \"" << baseName << ".h\"\n\n";
 
     enterLeaveNamespace(out, true /* enter */);
     out << "namespace implementation {\n\n";
 
-    // this is namespace aware code and doesn't require post-processing
-    out.setNamespace("");
-
     status_t err = generateMethods(out, [&](const Method *method, const Interface *) {
         return generateStubImplMethod(out, baseName, method);
     });
 
-    out << ifaceName
+    if (err != OK) {
+        return err;
+    }
+
+    out.setLinePrefix("//");
+    out << iface->localName()
         << "* ";
-    generateFetchSymbol(out, ifaceName);
+    generateFetchSymbol(out, iface->localName());
     out << "(const char* /* name */) {\n";
     out.indent();
     out << "return new " << baseName << "();\n";
     out.unindent();
     out << "}\n\n";
+    out.unsetLinePrefix();
 
     out << "}  // namespace implementation\n";
     enterLeaveNamespace(out, false /* leave */);

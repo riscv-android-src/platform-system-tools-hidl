@@ -16,22 +16,24 @@
 
 #include "StringType.h"
 
+#include "HidlTypeAssertion.h"
+
 #include <hidl-util/Formatter.h>
 
 namespace android {
 
-StringType::StringType() {}
-
-void StringType::addNamedTypesToSet(std::set<const FQName> &) const {
-    // do nothing
-}
+StringType::StringType(Scope* parent) : Type(parent) {}
 
 bool StringType::isString() const {
     return true;
 }
 
-bool StringType::canCheckEquality() const {
+bool StringType::deepCanCheckEquality(std::unordered_set<const Type*>* /* visited */) const {
     return true;
+}
+
+std::string StringType::typeName() const {
+    return "string";
 }
 
 std::string StringType::getCppType(StorageMode mode,
@@ -80,7 +82,10 @@ void StringType::emitReaderWriter(
     if (isReader) {
         out << "_hidl_err = "
             << parcelObjDeref
-            << "readBuffer(&"
+            << "readBuffer("
+            << "sizeof(*"
+            << name
+            << "), &"
             << parentName
             << ", "
             << " reinterpret_cast<const void **>("
@@ -159,6 +164,13 @@ void StringType::emitJavaFieldReaderWriter(
         const std::string &offset,
         bool isReader) const {
     if (isReader) {
+        out << fieldName
+            << " = "
+            << blobName
+            << ".getString("
+            << offset
+            << ");\n";
+
         out << "\n"
             << parcelName
             << ".readEmbeddedBuffer(\n";
@@ -166,20 +178,17 @@ void StringType::emitJavaFieldReaderWriter(
         out.indent();
         out.indent();
 
-        out << blobName
+        // hidl_string's embedded buffer is never null(able), because it defaults to a
+        // buffer containing an empty string.
+        out << fieldName << ".getBytes().length + 1,\n"
+            << blobName
             << ".handle(),\n"
             << offset
-            << " + 0 /* offsetof(hidl_string, mBuffer) */);\n\n";
+            << " + 0 /* offsetof(hidl_string, mBuffer) */,"
+            << "false /* nullable */);\n\n";
 
         out.unindent();
         out.unindent();
-
-        out << fieldName
-            << " = "
-            << blobName
-            << ".getString("
-            << offset
-            << ");\n";
 
         return;
     }
@@ -205,9 +214,10 @@ status_t StringType::emitVtsTypeDeclarations(Formatter &out) const {
     return OK;
 }
 
+static HidlTypeAssertion assertion("hidl_string", 16 /* size */);
 void StringType::getAlignmentAndSize(size_t *align, size_t *size) const {
     *align = 8;  // hidl_string
-    *size = 16;
+    *size = assertion.size();
 }
 
 }  // namespace android

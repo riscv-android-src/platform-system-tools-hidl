@@ -24,14 +24,25 @@
 
 namespace android {
 
-RefType::RefType() {
+RefType::RefType(Scope* parent) : TemplatedType(parent) {}
+
+std::string RefType::templatedTypeName() const {
+    return "ref";
 }
 
-std::string RefType::typeName() const {
-    return "ref" + (mElementType == nullptr ? "" : (" of " + mElementType->typeName()));
+std::vector<const Reference<Type>*> RefType::getStrongReferences() const {
+    return {};
 }
 
-bool RefType::isCompatibleElementType(Type *elementType) const {
+std::string RefType::getVtsType() const {
+    return "TYPE_REF";
+}
+
+std::string RefType::getVtsValueName() const {
+    return "ref_value";
+}
+
+bool RefType::isCompatibleElementType(const Type* elementType) const {
     if (elementType->isScalar()) {
         return true;
     }
@@ -44,15 +55,17 @@ bool RefType::isCompatibleElementType(Type *elementType) const {
     if (elementType->isBitField()) {
         return true;
     }
-    if (elementType->isCompoundType()
-            && static_cast<CompoundType *>(elementType)->style() == CompoundType::STYLE_STRUCT) {
+    if (elementType->isCompoundType() &&
+        static_cast<const CompoundType*>(elementType)->style() == CompoundType::STYLE_STRUCT) {
         return true;
     }
     if (elementType->isTemplatedType()) {
-        return this->isCompatibleElementType(static_cast<TemplatedType *>(elementType)->getElementType());
+        return this->isCompatibleElementType(
+            static_cast<const TemplatedType*>(elementType)->getElementType());
     }
     if (elementType->isArray()) {
-        return this->isCompatibleElementType(static_cast<ArrayType *>(elementType)->getElementType());
+        return this->isCompatibleElementType(
+            static_cast<const ArrayType*>(elementType)->getElementType());
     }
     return false;
 }
@@ -65,10 +78,6 @@ bool RefType::isCompatibleElementType(Type *elementType) const {
 std::string RefType::getCppType(StorageMode /*mode*/, bool specifyNamespaces) const {
     return mElementType->getCppStackType(specifyNamespaces)
             + " const*";
-}
-
-void RefType::addNamedTypesToSet(std::set<const FQName> &set) const {
-    mElementType->addNamedTypesToSet(set);
 }
 
 void RefType::emitReaderWriter(
@@ -221,7 +230,7 @@ void RefType::emitResolveReferencesEmbedded(
     out << "}\n\n";
 }
 
-bool RefType::needsResolveReferences() const {
+bool RefType::deepNeedsResolveReferences(std::unordered_set<const Type*>* /* visited */) const {
     return true;
 }
 
@@ -233,32 +242,12 @@ bool RefType::resultNeedsDeref() const {
     return false;
 }
 
-status_t RefType::emitVtsTypeDeclarations(Formatter &out) const {
-    out << "type: TYPE_REF\n" << "ref_value: {\n";
-    out.indent();
-    status_t err = mElementType->emitVtsTypeDeclarations(out);
-    if (err != OK) {
-        return err;
-    }
-    out.unindent();
-    out << "}\n";
-    return OK;
-}
-
-status_t RefType::emitVtsAttributeType(Formatter &out) const {
-    out << "type: TYPE_REF\n" << "ref_value: {\n";
-    out.indent();
-    status_t status = mElementType->emitVtsAttributeType(out);
-    if (status != OK) {
-        return status;
-    }
-    out.unindent();
-    out << "}\n";
-    return OK;
-}
-
-bool RefType::isJavaCompatible() const {
+bool RefType::deepIsJavaCompatible(std::unordered_set<const Type*>* /* visited */) const {
     return false;
+}
+
+bool RefType::deepContainsPointer(std::unordered_set<const Type*>* /* visited */) const {
+    return true;
 }
 
 }  // namespace android

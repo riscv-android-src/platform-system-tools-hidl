@@ -16,19 +16,21 @@
 
 #include "HandleType.h"
 
+#include "HidlTypeAssertion.h"
+
 #include <hidl-util/Formatter.h>
 #include <android-base/logging.h>
 
 namespace android {
 
-HandleType::HandleType() {}
-
-void HandleType::addNamedTypesToSet(std::set<const FQName> &) const {
-    // do nothing
-}
+HandleType::HandleType(Scope* parent) : Type(parent) {}
 
 bool HandleType::isHandle() const {
     return true;
+}
+
+std::string HandleType::typeName() const {
+    return "handle";
 }
 
 std::string HandleType::getCppType(StorageMode mode,
@@ -69,7 +71,7 @@ void HandleType::emitReaderWriter(
 
         out << "_hidl_err = "
             << parcelObjDeref
-            << "readNativeHandleNoDup("
+            << "readNullableNativeHandleNoDup("
             << "&" << name << "_ptr"
             << ");\n\n";
 
@@ -111,7 +113,7 @@ void HandleType::emitReaderWriterEmbedded(
             << "_hidl_err = "
             << parcelObj
             << (parcelObjIsPointer ? "->" : ".")
-            << "readEmbeddedNativeHandle(\n";
+            << "readNullableEmbeddedNativeHandle(\n";
 
         out.indent();
         out.indent();
@@ -155,12 +157,14 @@ bool HandleType::needsEmbeddedReadWrite() const {
     return true;
 }
 
-bool HandleType::isJavaCompatible() const {
+bool HandleType::deepIsJavaCompatible(std::unordered_set<const Type*>* /* visited */) const {
     return false;
 }
 
+static HidlTypeAssertion assertion("hidl_handle", 16 /* size */);
 void HandleType::getAlignmentAndSize(size_t *align, size_t *size) const {
-    *align = *size = 8;
+    *align = 8;  // hidl_handle
+    *size = assertion.size();
 }
 
 status_t HandleType::emitVtsTypeDeclarations(Formatter &out) const {

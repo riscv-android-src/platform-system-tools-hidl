@@ -19,6 +19,7 @@
 #include "Coordinator.h"
 #include "Interface.h"
 #include "Method.h"
+#include "Reference.h"
 #include "Scope.h"
 
 #include <hidl-util/Formatter.h>
@@ -26,12 +27,9 @@
 
 namespace android {
 
-void AST::emitJavaReaderWriter(
-        Formatter &out,
-        const std::string &parcelObj,
-        const TypedVar *arg,
-        bool isReader,
-        bool addPrefixToName) const {
+void AST::emitJavaReaderWriter(Formatter& out, const std::string& parcelObj,
+                               const NamedReference<Type>* arg, bool isReader,
+                               bool addPrefixToName) const {
     if (isReader) {
         out << arg->type().getJavaType()
             << " "
@@ -49,7 +47,7 @@ status_t AST::generateJavaTypes(
         const std::string &outputPath, const std::string &limitToType) const {
     // Splits types.hal up into one java file per declared type.
 
-    for (const auto &type : mRootScope->getSubTypes()) {
+    for (const auto& type : mRootScope.getSubTypes()) {
         std::string typeName = type->localName();
 
         if (type->isTypeDef()) {
@@ -60,21 +58,12 @@ status_t AST::generateJavaTypes(
             continue;
         }
 
-        std::string path = outputPath;
-        path.append(mCoordinator->convertPackageRootToPath(mPackage));
-        path.append(mCoordinator->getPackagePath(mPackage, true /* relative */,
-                true /* sanitized */));
-        path.append(typeName);
-        path.append(".java");
+        Formatter out = mCoordinator->getFormatter(
+            outputPath, mPackage, Coordinator::Location::GEN_SANITIZED, typeName + ".java");
 
-        CHECK(Coordinator::MakeParentHierarchy(path));
-        FILE *file = fopen(path.c_str(), "w");
-
-        if (file == NULL) {
-            return -errno;
+        if (!out.isValid()) {
+            return UNKNOWN_ERROR;
         }
-
-        Formatter out(file);
 
         std::vector<std::string> packageComponents;
         getPackageAndVersionComponents(
@@ -95,6 +84,46 @@ status_t AST::generateJavaTypes(
     return OK;
 }
 
+void emitGetService(
+        Formatter& out,
+        const std::string& ifaceName,
+        const std::string& fqName,
+        bool isRetry) {
+    out << "public static "
+        << ifaceName
+        << " getService(String serviceName";
+    if (isRetry) {
+        out << ", boolean retry";
+    }
+    out << ") throws android.os.RemoteException ";
+    out.block([&] {
+        out << "return "
+            << ifaceName
+            << ".asInterface(android.os.HwBinder.getService(\""
+            << fqName
+            << "\", serviceName";
+        if (isRetry) {
+            out << ", retry";
+        }
+        out << "));\n";
+    }).endl().endl();
+
+    out << "public static "
+        << ifaceName
+        << " getService(";
+    if (isRetry) {
+        out << "boolean retry";
+    }
+    out << ") throws android.os.RemoteException ";
+    out.block([&] {
+        out << "return getService(\"default\"";
+        if (isRetry) {
+            out << ", retry";
+        }
+        out <<");\n";
+    }).endl().endl();
+}
+
 status_t AST::generateJava(
         const std::string &outputPath, const std::string &limitToType) const {
     if (!isJavaCompatible()) {
@@ -108,38 +137,27 @@ status_t AST::generateJava(
         return UNKNOWN_ERROR;
     }
 
-    std::string ifaceName;
-    if (!AST::isInterface(&ifaceName)) {
+    if (!AST::isInterface()) {
         return generateJavaTypes(outputPath, limitToType);
     }
 
-    const Interface *iface = mRootScope->getInterface();
+    const Interface* iface = mRootScope.getInterface();
+    std::string ifaceName = iface->localName();
 
     const std::string baseName = iface->getBaseName();
 
-    std::string path = outputPath;
-    path.append(mCoordinator->convertPackageRootToPath(mPackage));
-    path.append(mCoordinator->getPackagePath(mPackage, true /* relative */,
-            true /* sanitized */));
-    path.append(ifaceName);
-    path.append(".java");
+    Formatter out = mCoordinator->getFormatter(
+        outputPath, mPackage, Coordinator::Location::GEN_SANITIZED, ifaceName + ".java");
 
-    CHECK(Coordinator::MakeParentHierarchy(path));
-    FILE *file = fopen(path.c_str(), "w");
-
-    if (file == NULL) {
-        return -errno;
+    if (!out.isValid()) {
+        return UNKNOWN_ERROR;
     }
-
-    Formatter out(file);
 
     std::vector<std::string> packageComponents;
     getPackageAndVersionComponents(
             &packageComponents, true /* cpp_compatible */);
 
     out << "package " << mPackage.javaPackage() << ";\n\n";
-
-    out << "import android.os.RemoteException;\n\n";
 
     out.setNamespace(mPackage.javaPackage() + ".");
 
@@ -162,7 +180,7 @@ status_t AST::generateJava(
         << ifaceName
         << "\";\n\n";
 
-    out << "public static "
+    out << "/* package private */ static "
         << ifaceName
         << " asInterface(android.os.IHwBinder binder) {\n";
 
@@ -190,28 +208,45 @@ status_t AST::generateJava(
     out.unindent();
     out << "}\n\n";
 
-    out << "return new " << ifaceName << ".Proxy(binder);\n";
+    out << ifaceName << " proxy = new " << ifaceName << ".Proxy(binder);\n\n";
+    out << "try {\n";
+    out.indent();
+    out << "for (String descriptor : proxy.interfaceChain()) {\n";
+    out.indent();
+    out << "if (descriptor.equals(kInterfaceName)) {\n";
+    out.indent();
+    out << "return proxy;\n";
+    out.unindent();
+    out << "}\n";
+    out.unindent();
+    out << "}\n";
+    out.unindent();
+    out << "} catch (android.os.RemoteException e) {\n";
+    out.indent();
+    out.unindent();
+    out << "}\n\n";
+
+    out << "return null;\n";
+
+    out.unindent();
+    out << "}\n\n";
+
+    out << "public static "
+        << ifaceName
+        << " castFrom(android.os.IHwInterface iface) {\n";
+    out.indent();
+
+    out << "return (iface == null) ? null : "
+        << ifaceName
+        << ".asInterface(iface.asBinder());\n";
 
     out.unindent();
     out << "}\n\n";
 
     out << "@Override\npublic android.os.IHwBinder asBinder();\n\n";
 
-    out << "public static "
-        << ifaceName
-        << " getService(String serviceName) throws RemoteException {\n";
-
-    out.indent();
-
-    out << "return "
-        << ifaceName
-        << ".asInterface(android.os.HwBinder.getService(\""
-        << iface->fqName().string()
-        << "\",serviceName));\n";
-
-    out.unindent();
-
-    out << "}\n\n";
+    emitGetService(out, ifaceName, iface->fqName().string(), true /* isRetry */);
+    emitGetService(out, ifaceName, iface->fqName().string(), false /* isRetry */);
 
     status_t err = emitJavaTypeDeclarations(out);
 
@@ -220,19 +255,22 @@ status_t AST::generateJava(
     }
 
     for (const auto &method : iface->methods()) {
+        if (method->isHiddenFromJava()) {
+            continue;
+        }
+
         const bool returnsValue = !method->results().empty();
         const bool needsCallback = method->results().size() > 1;
 
         if (needsCallback) {
-            out << "\npublic interface "
-                << method->name()
+            out << "\n@java.lang.FunctionalInterface\npublic interface " << method->name()
                 << "Callback {\n";
 
             out.indent();
 
-            out << "public void onValues("
-                << Method::GetJavaArgSignature(method->results())
-                << ");\n";
+            out << "public void onValues(";
+            method->emitJavaResultSignature(out);
+            out << ");\n";
 
             out.unindent();
             out << "}\n\n";
@@ -246,8 +284,8 @@ status_t AST::generateJava(
 
         out << " "
             << method->name()
-            << "("
-            << Method::GetJavaArgSignature(method->args());
+            << "(";
+        method->emitJavaArgSignature(out);
 
         if (needsCallback) {
             if (!method->args().empty()) {
@@ -255,12 +293,12 @@ status_t AST::generateJava(
             }
 
             out << method->name()
-                << "Callback cb";
+                << "Callback _hidl_cb";
         }
 
         out << ")\n";
         out.indent();
-        out << "throws RemoteException;\n";
+        out << "throws android.os.RemoteException;\n";
         out.unindent();
     }
 
@@ -283,9 +321,26 @@ status_t AST::generateJava(
     out.unindent();
     out << "}\n\n";
 
+
+    out << "@Override\npublic String toString() ";
+    out.block([&] {
+        out.sTry([&] {
+            out << "return this.interfaceDescriptor() + \"@Proxy\";\n";
+        }).sCatch("android.os.RemoteException ex", [&] {
+            out << "/* ignored; handled below. */\n";
+        }).endl();
+        out << "return \"[class or subclass of \" + "
+            << ifaceName << ".kInterfaceName + \"]@Proxy\";\n";
+    }).endl().endl();
+
     const Interface *prevInterface = nullptr;
     for (const auto &tuple : iface->allMethodsFromRoot()) {
         const Method *method = tuple.method();
+
+        if (method->isHiddenFromJava()) {
+            continue;
+        }
+
         const Interface *superInterface = tuple.interface();
         if (prevInterface != superInterface) {
             out << "// Methods from "
@@ -305,8 +360,8 @@ status_t AST::generateJava(
 
         out << " "
             << method->name()
-            << "("
-            << Method::GetJavaArgSignature(method->args());
+            << "(";
+        method->emitJavaArgSignature(out);
 
         if (needsCallback) {
             if (!method->args().empty()) {
@@ -314,13 +369,13 @@ status_t AST::generateJava(
             }
 
             out << method->name()
-                << "Callback cb";
+                << "Callback _hidl_cb";
         }
 
         out << ")\n";
         out.indent();
         out.indent();
-        out << "throws RemoteException {\n";
+        out << "throws android.os.RemoteException {\n";
         out.unindent();
 
         if (method->isHidlReserved() && method->overridesJavaImpl(IMPL_PROXY)) {
@@ -343,60 +398,65 @@ status_t AST::generateJava(
                     false /* addPrefixToName */);
         }
 
-        out << "\nandroid.os.HwParcel _hidl_reply = new android.os.HwParcel();\n"
-            << "mRemote.transact("
-            << method->getSerialId()
-            << " /* "
-            << method->name()
-            << " */, _hidl_request, _hidl_reply, ";
+        out << "\nandroid.os.HwParcel _hidl_reply = new android.os.HwParcel();\n";
 
-        if (method->isOneway()) {
-            out << "android.os.IHwBinder.FLAG_ONEWAY";
-        } else {
-            out << "0 /* flags */";
-        }
+        out.sTry([&] {
+            out << "mRemote.transact("
+                << method->getSerialId()
+                << " /* "
+                << method->name()
+                << " */, _hidl_request, _hidl_reply, ";
 
-        out << ");\n";
-
-        if (!method->isOneway()) {
-            out << "_hidl_reply.verifySuccess();\n";
-        } else {
-            CHECK(!returnsValue);
-        }
-
-        out << "_hidl_request.releaseTemporaryStorage();\n";
-
-        if (returnsValue) {
-            out << "\n";
-
-            for (const auto &arg : method->results()) {
-                emitJavaReaderWriter(
-                        out,
-                        "_hidl_reply",
-                        arg,
-                        true /* isReader */,
-                        true /* addPrefixToName */);
+            if (method->isOneway()) {
+                out << "android.os.IHwBinder.FLAG_ONEWAY";
+            } else {
+                out << "0 /* flags */";
             }
 
-            if (needsCallback) {
-                out << "cb.onValues(";
+            out << ");\n";
 
-                bool firstField = true;
+            if (!method->isOneway()) {
+                out << "_hidl_reply.verifySuccess();\n";
+            } else {
+                CHECK(!returnsValue);
+            }
+
+            out << "_hidl_request.releaseTemporaryStorage();\n";
+
+            if (returnsValue) {
+                out << "\n";
+
                 for (const auto &arg : method->results()) {
-                    if (!firstField) {
-                        out << ", ";
-                    }
-
-                    out << "_hidl_out_" << arg->name();
-                    firstField = false;
+                    emitJavaReaderWriter(
+                            out,
+                            "_hidl_reply",
+                            arg,
+                            true /* isReader */,
+                            true /* addPrefixToName */);
                 }
 
-                out << ");\n";
-            } else {
-                const std::string returnName = method->results()[0]->name();
-                out << "return _hidl_out_" << returnName << ";\n";
+                if (needsCallback) {
+                    out << "_hidl_cb.onValues(";
+
+                    bool firstField = true;
+                    for (const auto &arg : method->results()) {
+                        if (!firstField) {
+                            out << ", ";
+                        }
+
+                        out << "_hidl_out_" << arg->name();
+                        firstField = false;
+                    }
+
+                    out << ");\n";
+                } else {
+                    const std::string returnName = method->results()[0]->name();
+                    out << "return _hidl_out_" << returnName << ";\n";
+                }
             }
-        }
+        }).sFinally([&] {
+            out << "_hidl_reply.release();\n";
+        }).endl();
 
         out.unindent();
         out << "}\n\n";
@@ -420,6 +480,10 @@ status_t AST::generateJava(
     out << "}\n\n";
 
     for (Method *method : iface->hidlReservedMethods()) {
+        if (method->isHiddenFromJava()) {
+            continue;
+        }
+
         // b/32383557 this is a hack. We need to change this if we have more reserved methods.
         CHECK_LE(method->results().size(), 1u);
         std::string resultType = method->results().size() == 0 ? "void" :
@@ -428,12 +492,12 @@ status_t AST::generateJava(
             << resultType
             << " "
             << method->name()
-            << "("
-            << Method::GetJavaArgSignature(method->args())
-            << ") {\n";
+            << "(";
+        method->emitJavaArgSignature(out);
+        out << ") {\n";
 
         out.indent();
-        method->javaImpl(IMPL_HEADER, out);
+        method->javaImpl(IMPL_INTERFACE, out);
         out.unindent();
         out << "\n}\n\n";
     }
@@ -451,13 +515,18 @@ status_t AST::generateJava(
     out.unindent();
     out << "}\n\n";
 
-    out << "public void registerAsService(String serviceName) throws RemoteException {\n";
+    out << "public void registerAsService(String serviceName) throws android.os.RemoteException {\n";
     out.indent();
 
-    out << "registerService(interfaceChain(), serviceName);\n";
+    out << "registerService(serviceName);\n";
 
     out.unindent();
     out << "}\n\n";
+
+    out << "@Override\npublic String toString() ";
+    out.block([&] {
+        out << "return this.interfaceDescriptor() + \"@Stub\";\n";
+    }).endl().endl();
 
     out << "@Override\n"
         << "public void onTransact("
@@ -467,7 +536,7 @@ status_t AST::generateJava(
         << "int _hidl_flags)\n";
     out.indent();
     out.indent();
-    out << "throws RemoteException {\n";
+    out << "throws android.os.RemoteException {\n";
     out.unindent();
 
     out << "switch (_hidl_code) {\n";
@@ -476,6 +545,7 @@ status_t AST::generateJava(
 
     for (const auto &tuple : iface->allMethodsFromRoot()) {
         const Method *method = tuple.method();
+
         const Interface *superInterface = tuple.interface();
         const bool returnsValue = !method->results().empty();
         const bool needsCallback = method->results().size() > 1;
@@ -487,6 +557,7 @@ status_t AST::generateJava(
             << " */:\n{\n";
 
         out.indent();
+
         if (method->isHidlReserved() && method->overridesJavaImpl(IMPL_STUB)) {
             method->javaImpl(IMPL_STUB, out);
             out.unindent();
@@ -499,6 +570,19 @@ status_t AST::generateJava(
             << superInterface->fullJavaName()
             << ".kInterfaceName);\n\n";
 
+        if (method->isHiddenFromJava()) {
+            // This is a method hidden from the Java side of things, it must not
+            // return any value and will simply signal success.
+            CHECK(!returnsValue);
+
+            out << "_hidl_reply.writeStatus(android.os.HwParcel.STATUS_SUCCESS);\n";
+            out << "_hidl_reply.send();\n";
+            out << "break;\n";
+            out.unindent();
+            out << "}\n\n";
+            continue;
+        }
+
         for (const auto &arg : method->args()) {
             emitJavaReaderWriter(
                     out,
@@ -509,7 +593,7 @@ status_t AST::generateJava(
         }
 
         if (!needsCallback && returnsValue) {
-            const TypedVar *returnArg = method->results()[0];
+            const NamedReference<Type>* returnArg = method->results()[0];
 
             out << returnArg->type().getJavaType()
                 << " _hidl_out_"
@@ -540,9 +624,9 @@ status_t AST::generateJava(
             out.indent();
 
             out << "@Override\n"
-                << "public void onValues("
-                << Method::GetJavaArgSignature(method->results())
-                << ") {\n";
+                << "public void onValues(";
+            method->emitJavaResultSignature(out);
+            out << ") {\n";
 
             out.indent();
             out << "_hidl_reply.writeStatus(android.os.HwParcel.STATUS_SUCCESS);\n";
@@ -566,11 +650,11 @@ status_t AST::generateJava(
 
         out << ");\n";
 
-        if (!needsCallback) {
+        if (!needsCallback && !method->isOneway()) {
             out << "_hidl_reply.writeStatus(android.os.HwParcel.STATUS_SUCCESS);\n";
 
             if (returnsValue) {
-                const TypedVar *returnArg = method->results()[0];
+                const NamedReference<Type>* returnArg = method->results()[0];
 
                 emitJavaReaderWriter(
                         out,
@@ -604,8 +688,7 @@ status_t AST::generateJava(
 }
 
 status_t AST::emitJavaTypeDeclarations(Formatter &out) const {
-    return mRootScope->emitJavaTypeDeclarations(out, false /* atTopLevel */);
+    return mRootScope.emitJavaTypeDeclarations(out, false /* atTopLevel */);
 }
 
 }  // namespace android
-

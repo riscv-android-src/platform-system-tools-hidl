@@ -20,9 +20,7 @@
 
 namespace android {
 
-ScalarType::ScalarType(Kind kind)
-    : mKind(kind) {
-}
+ScalarType::ScalarType(Kind kind, Scope* parent) : Type(parent), mKind(kind) {}
 
 const ScalarType *ScalarType::resolveToScalarType() const {
     return this;
@@ -33,10 +31,6 @@ bool ScalarType::isValidEnumStorageType() const {
     return mKind >= KIND_INT8 && mKind <= KIND_UINT64;
 }
 
-void ScalarType::addNamedTypesToSet(std::set<const FQName> &) const {
-    // do nothing
-}
-
 bool ScalarType::isScalar() const {
     return true;
 }
@@ -45,7 +39,7 @@ bool ScalarType::isElidableType() const {
     return true;
 }
 
-bool ScalarType::canCheckEquality() const {
+bool ScalarType::deepCanCheckEquality(std::unordered_set<const Type*>* /* visited */) const {
     return true;
 }
 
@@ -209,6 +203,47 @@ void ScalarType::emitReaderWriterWithCast(
         << ");\n";
 
     handleError(out, mode);
+}
+
+void ScalarType::emitHexDump(
+        Formatter &out,
+        const std::string &streamName,
+        const std::string &name) const {
+    out << streamName << " += toHexString(" << name << ");\n";
+}
+
+void ScalarType::emitConvertToJavaHexString(
+        Formatter &out,
+        const std::string &name) const {
+    switch(mKind) {
+        case KIND_BOOL: {
+            out << "((" << name << ") ? \"0x1\" : \"0x0\")";
+            break;
+        }
+        case KIND_INT8:     // fallthrough
+        case KIND_UINT8:    // fallthrough
+        case KIND_INT16:    // fallthrough
+        case KIND_UINT16: {
+            // Because Byte and Short doesn't have toHexString, we have to use Integer.toHexString.
+            out << "Integer.toHexString(" << getJavaWrapperType() << ".toUnsignedInt(("
+                << getJavaType(false /* forInitializer */) << ")(" << name << ")))";
+            break;
+        }
+        case KIND_INT32:    // fallthrough
+        case KIND_UINT32:   // fallthrough
+        case KIND_INT64:    // fallthrough
+        case KIND_UINT64: {
+            out << getJavaWrapperType() << ".toHexString(" << name << ")";
+            break;
+        }
+        case KIND_FLOAT:    // fallthrough
+        case KIND_DOUBLE:   // fallthrough
+        default: {
+            // no hex for floating point numbers.
+            out << name;
+            break;
+        }
+    }
 }
 
 void ScalarType::emitJavaFieldReaderWriter(

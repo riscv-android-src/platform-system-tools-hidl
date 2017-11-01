@@ -18,75 +18,107 @@
 
 #include "ArrayType.h"
 #include "VectorType.h"
-#include <hidl-util/Formatter.h>
+
 #include <android-base/logging.h>
+#include <hidl-util/Formatter.h>
+#include <iostream>
+#include <unordered_set>
 
 namespace android {
 
-CompoundType::CompoundType(Style style, const char *localName, const Location &location)
-    : Scope(localName, location),
-      mStyle(style),
-      mFields(NULL) {
-}
+CompoundType::CompoundType(Style style, const char* localName, const FQName& fullName,
+                           const Location& location, Scope* parent)
+    : Scope(localName, fullName, location, parent), mStyle(style), mFields(NULL) {}
 
 CompoundType::Style CompoundType::style() const {
     return mStyle;
 }
 
-bool CompoundType::setFields(
-        std::vector<CompoundField *> *fields, std::string *errorMsg) {
+void CompoundType::setFields(std::vector<NamedReference<Type>*>* fields) {
     mFields = fields;
+}
 
-    for (const auto &field : *fields) {
-        const Type &type = field->type();
+std::vector<const Reference<Type>*> CompoundType::getReferences() const {
+    std::vector<const Reference<Type>*> ret;
+    ret.insert(ret.begin(), mFields->begin(), mFields->end());
+    return ret;
+}
+
+status_t CompoundType::validate() const {
+    for (const auto* field : *mFields) {
+        const Type& type = field->type();
 
         if (type.isBinder()
                 || (type.isVector()
                     && static_cast<const VectorType *>(
                         &type)->isVectorOfBinders())) {
-            *errorMsg =
-                "Structs/Unions must not contain references to interfaces.";
-
-            return false;
+            std::cerr << "ERROR: Struct/Union must not contain references to interfaces at "
+                      << field->location() << "\n";
+            return UNKNOWN_ERROR;
         }
 
         if (mStyle == STYLE_UNION) {
             if (type.needsEmbeddedReadWrite()) {
-                // Can't have those in a union.
-
-                *errorMsg =
-                    "Unions must not contain any types that need fixup.";
-
-                return false;
+                std::cerr << "ERROR: Union must not contain any types that need fixup at "
+                          << field->location() << "\n";
+                return UNKNOWN_ERROR;
             }
         }
     }
 
-    return true;
+    status_t err = validateUniqueNames();
+    if (err != OK) return err;
+
+    return Scope::validate();
+}
+
+status_t CompoundType::validateUniqueNames() const {
+    std::unordered_set<std::string> names;
+
+    for (const auto* field : *mFields) {
+        if (names.find(field->name()) != names.end()) {
+            std::cerr << "ERROR: Redefinition of field '" << field->name() << "' at "
+                      << field->location() << "\n";
+            return UNKNOWN_ERROR;
+        }
+        names.insert(field->name());
+    }
+
+    return OK;
 }
 
 bool CompoundType::isCompoundType() const {
     return true;
 }
 
-bool CompoundType::canCheckEquality() const {
+bool CompoundType::deepCanCheckEquality(std::unordered_set<const Type*>* visited) const {
     if (mStyle == STYLE_UNION) {
         return false;
     }
-    for (const auto &field : *mFields) {
-        if (!field->type().canCheckEquality()) {
+    for (const auto* field : *mFields) {
+        if (!field->get()->canCheckEquality(visited)) {
             return false;
         }
     }
     return true;
 }
 
+std::string CompoundType::typeName() const {
+    switch (mStyle) {
+        case STYLE_STRUCT: {
+            return "struct " + localName();
+        }
+        case STYLE_UNION: {
+            return "union " + localName();
+        }
+    }
+    CHECK(!"Should not be here");
+}
 
 std::string CompoundType::getCppType(
         StorageMode mode,
-        bool specifyNamespaces) const {
-    const std::string base =
-        specifyNamespaces ? fullName() : partialCppName();
+        bool /* specifyNamespaces */) const {
+    const std::string base = fullName();
 
     switch (mode) {
         case StorageMode_Stack:
@@ -115,6 +147,7 @@ std::string CompoundType::getVtsType() const {
             return "TYPE_UNION";
         }
     }
+    CHECK(!"Should not be here");
 }
 
 void CompoundType::emitReaderWriter(
@@ -135,7 +168,9 @@ void CompoundType::emitReaderWriter(
         out << "_hidl_err = "
             << parcelObjDeref
             << "readBuffer("
-            << "&"
+            << "sizeof(*"
+            << name
+            << "), &"
             << parentName
             << ", "
             << " reinterpret_cast<const void **>("
@@ -346,7 +381,7 @@ status_t CompoundType::emitTypeDeclarations(Formatter &out) const {
 
     Scope::emitTypeDeclarations(out);
 
-    if (!isJavaCompatible()) {
+    if (containsPointer()) {
         for (const auto &field : *mFields) {
             out << field->type().getCppStackType()
                 << " "
@@ -388,7 +423,9 @@ status_t CompoundType::emitTypeDeclarations(Formatter &out) const {
                     << ", \"wrong offset\");\n";
             }
 
-            offset += fieldSize;
+            if (mStyle == STYLE_STRUCT) {
+                offset += fieldSize;
+            }
         }
 
         if (pass == 0) {
@@ -415,31 +452,26 @@ status_t CompoundType::emitTypeDeclarations(Formatter &out) const {
     return OK;
 }
 
+void CompoundType::emitTypeForwardDeclaration(Formatter& out) const {
+    out << ((mStyle == STYLE_STRUCT) ? "struct" : "union") << " " << localName() << ";\n";
+}
 
 status_t CompoundType::emitGlobalTypeDeclarations(Formatter &out) const {
     Scope::emitGlobalTypeDeclarations(out);
 
-    if (!canCheckEquality()) {
-        return OK;
+    out << "std::string toString("
+        << getCppArgumentType()
+        << ");\n\n";
+
+    if (canCheckEquality()) {
+        out << "bool operator==("
+            << getCppArgumentType() << ", " << getCppArgumentType() << ");\n\n";
+
+        out << "bool operator!=("
+            << getCppArgumentType() << ", " << getCppArgumentType() << ");\n\n";
+    } else {
+        out << "// operator== and operator!= are not generated for " << localName() << "\n\n";
     }
-
-    out << "inline bool operator==("
-        << getCppArgumentType() << " " << (mFields->empty() ? "/* lhs */" : "lhs") << ", "
-        << getCppArgumentType() << " " << (mFields->empty() ? "/* rhs */" : "rhs") << ") ";
-    out.block([&] {
-        for (const auto &field : *mFields) {
-            out.sIf("lhs." + field->name() + " != rhs." + field->name(), [&] {
-                out << "return false;\n";
-            }).endl();
-        }
-        out << "return true;\n";
-    }).endl().endl();
-
-    out << "inline bool operator!=("
-        << getCppArgumentType() << " lhs," << getCppArgumentType() << " rhs)";
-    out.block([&] {
-        out << "return !(lhs == rhs);\n";
-    }).endl().endl();
 
     return OK;
 }
@@ -450,7 +482,7 @@ status_t CompoundType::emitGlobalHwDeclarations(Formatter &out) const  {
 
         out.indent(2);
 
-        out << fullName() << " *obj,\n"
+        out << "const " << fullName() << " &obj,\n"
             << "const ::android::hardware::Parcel &parcel,\n"
             << "size_t parentHandle,\n"
             << "size_t parentOffset);\n\n";
@@ -487,8 +519,7 @@ status_t CompoundType::emitGlobalHwDeclarations(Formatter &out) const  {
     return OK;
 }
 
-status_t CompoundType::emitTypeDefinitions(
-        Formatter &out, const std::string prefix) const {
+status_t CompoundType::emitTypeDefinitions(Formatter& out, const std::string& prefix) const {
     std::string space = prefix.empty() ? "" : (prefix + "::");
     status_t err = Scope::emitTypeDefinitions(out, space + localName());
 
@@ -504,6 +535,51 @@ status_t CompoundType::emitTypeDefinitions(
     if (needsResolveReferences()) {
         emitResolveReferenceDef(out, prefix, true /* isReader */);
         emitResolveReferenceDef(out, prefix, false /* isReader */);
+    }
+
+    out << "std::string toString("
+        << getCppArgumentType()
+        << (mFields->empty() ? "" : " o")
+        << ") ";
+
+    out.block([&] {
+        // include toString for scalar types
+        out << "using ::android::hardware::toString;\n"
+            << "std::string os;\n";
+        out << "os += \"{\";\n";
+
+        for (const NamedReference<Type>* field : *mFields) {
+            out << "os += \"";
+            if (field != *(mFields->begin())) {
+                out << ", ";
+            }
+            out << "." << field->name() << " = \";\n";
+            field->type().emitDump(out, "os", "o." + field->name());
+        }
+
+        out << "os += \"}\"; return os;\n";
+    }).endl().endl();
+
+    if (canCheckEquality()) {
+        out << "bool operator==("
+            << getCppArgumentType() << " " << (mFields->empty() ? "/* lhs */" : "lhs") << ", "
+            << getCppArgumentType() << " " << (mFields->empty() ? "/* rhs */" : "rhs") << ") ";
+        out.block([&] {
+            for (const auto &field : *mFields) {
+                out.sIf("lhs." + field->name() + " != rhs." + field->name(), [&] {
+                    out << "return false;\n";
+                }).endl();
+            }
+            out << "return true;\n";
+        }).endl().endl();
+
+        out << "bool operator!=("
+            << getCppArgumentType() << " lhs," << getCppArgumentType() << " rhs)";
+        out.block([&] {
+            out << "return !(lhs == rhs);\n";
+        }).endl().endl();
+    } else {
+        out << "// operator== and operator!= are not generated for " << localName() << "\n";
     }
 
     return OK;
@@ -526,8 +602,6 @@ status_t CompoundType::emitJavaTypeDeclarations(
     Scope::emitJavaTypeDeclarations(out, false /* atTopLevel */);
 
     for (const auto &field : *mFields) {
-        const bool isScope = field->type().isScope();  // really isStruct...
-
         out << "public ";
 
         field->type().emitJavaFieldInitializer(out, field->name());
@@ -540,12 +614,23 @@ status_t CompoundType::emitJavaTypeDeclarations(
     ////////////////////////////////////////////////////////////////////////////
 
     if (canCheckEquality()) {
-        out << "public final boolean equals(" << localName() << " other) ";
+        out << "@Override\npublic final boolean equals(Object otherObject) ";
         out.block([&] {
+            out.sIf("this == otherObject", [&] {
+                out << "return true;\n";
+            }).endl();
+            out.sIf("otherObject == null", [&] {
+                out << "return false;\n";
+            }).endl();
+            // Though class is final, we use getClass instead of instanceof to be explicit.
+            out.sIf("otherObject.getClass() != " + fullJavaName() + ".class", [&] {
+                out << "return false;\n";
+            }).endl();
+            out << fullJavaName() << " other = (" << fullJavaName() << ")otherObject;\n";
             for (const auto &field : *mFields) {
-                std::string condition = field->type().isScalar()
+                std::string condition = (field->type().isScalar() || field->type().isEnum())
                     ? "this." + field->name() + " != other." + field->name()
-                    : ("!java.util.Objects.deepEquals(this." + field->name()
+                    : ("!android.os.HidlSupport.deepEquals(this." + field->name()
                             + ", other." + field->name() + ")");
                 out.sIf(condition, [&] {
                     out << "return false;\n";
@@ -554,41 +639,54 @@ status_t CompoundType::emitJavaTypeDeclarations(
             out << "return true;\n";
         }).endl().endl();
 
-        out << "public final int hashCode() ";
+        out << "@Override\npublic final int hashCode() ";
         out.block([&] {
-            out << "return java.util.Objects.hash(";
-            bool first = true;
-            for (const auto &field : *mFields) {
-                if (!first) {
-                    out << ", ";
-                }
-                first = false;
-                if (field->type().isArray()) {
-                    const ArrayType &type = static_cast<const ArrayType &>(field->type());
-                    if (type.countDimensions() == 1 &&
-                        type.getElementType()->resolveToScalarType() != nullptr) {
-                        out << "java.util.Arrays.hashCode(this." << field->name() << ")";
-                    } else {
-                        out << "java.util.Arrays.deepHashCode(this." << field->name() << ")";
-                    }
-                } else {
-                    out << "this." << field->name();
-                }
-            }
+            out << "return java.util.Objects.hash(\n";
+            out.indent(2, [&] {
+                out.join(mFields->begin(), mFields->end(), ", \n", [&] (const auto &field) {
+                    out << "android.os.HidlSupport.deepHashCode(this." << field->name() << ")";
+                });
+            });
             out << ");\n";
         }).endl().endl();
+    } else {
+        out << "// equals() is not generated for " << localName() << "\n";
     }
+
+    ////////////////////////////////////////////////////////////////////////////
+
+    out << "@Override\npublic final String toString() ";
+    out.block([&] {
+        out << "java.lang.StringBuilder builder = new java.lang.StringBuilder();\n"
+            << "builder.append(\"{\");\n";
+        for (const auto &field : *mFields) {
+            out << "builder.append(\"";
+            if (field != *(mFields->begin())) {
+                out << ", ";
+            }
+            out << "." << field->name() << " = \");\n";
+            field->type().emitJavaDump(out, "builder", "this." + field->name());
+        }
+        out << "builder.append(\"}\");\nreturn builder.toString();\n";
+    }).endl().endl();
+
+    size_t structAlign, structSize;
+    getAlignmentAndSize(&structAlign, &structSize);
 
     ////////////////////////////////////////////////////////////////////////////
 
     out << "public final void readFromParcel(android.os.HwParcel parcel) {\n";
     out.indent();
-    out << "android.os.HwBlob blob = parcel.readBuffer();\n";
+    out << "android.os.HwBlob blob = parcel.readBuffer(";
+    out << structSize << "/* size */);\n";
     out << "readEmbeddedFromParcel(parcel, blob, 0 /* parentOffset */);\n";
     out.unindent();
     out << "}\n\n";
 
     ////////////////////////////////////////////////////////////////////////////
+
+    size_t vecAlign, vecSize;
+    VectorType::getAlignmentAndSizeStatic(&vecAlign, &vecSize);
 
     out << "public static final java.util.ArrayList<"
         << localName()
@@ -599,7 +697,8 @@ status_t CompoundType::emitJavaTypeDeclarations(
         << localName()
         << "> _hidl_vec = new java.util.ArrayList();\n";
 
-    out << "android.os.HwBlob _hidl_blob = parcel.readBuffer();\n\n";
+    out << "android.os.HwBlob _hidl_blob = parcel.readBuffer(";
+    out << vecSize << " /* sizeof hidl_vec<T> */);\n\n";
 
     VectorType::EmitJavaFieldReaderWriterForElementType(
             out,
@@ -650,9 +749,6 @@ status_t CompoundType::emitJavaTypeDeclarations(
 
     ////////////////////////////////////////////////////////////////////////////
 
-    size_t structAlign, structSize;
-    getAlignmentAndSize(&structAlign, &structSize);
-
     out << "public final void writeToParcel(android.os.HwParcel parcel) {\n";
     out.indent();
 
@@ -675,7 +771,8 @@ status_t CompoundType::emitJavaTypeDeclarations(
         << "> _hidl_vec) {\n";
     out.unindent();
 
-    out << "android.os.HwBlob _hidl_blob = new android.os.HwBlob(24 /* sizeof(hidl_vec<T>) */);\n";
+    out << "android.os.HwBlob _hidl_blob = new android.os.HwBlob("
+        << vecSize << " /* sizeof(hidl_vec<T>) */);\n";
 
     VectorType::EmitJavaFieldReaderWriterForElementType(
             out,
@@ -755,7 +852,7 @@ void CompoundType::emitStructReaderWriter(
     std::string error = useName ? "" : "\n#error\n";
 
     if (isReader) {
-        out << space << localName() << " *" << name << ",\n";
+        out << "const " << space << localName() << " &" << name << ",\n";
         out << "const ::android::hardware::Parcel &parcel,\n";
     } else {
         out << "const " << space << localName() << " &" << name << ",\n";
@@ -780,7 +877,7 @@ void CompoundType::emitStructReaderWriter(
         field->type().emitReaderWriterEmbedded(
                 out,
                 0 /* depth */,
-                name + (isReader ? "->" : ".") + field->name() + error,
+                name + "." + field->name() + error,
                 field->name() /* sanitizedName */,
                 false /* nameIsPointer */,
                 "parcel",
@@ -795,17 +892,14 @@ void CompoundType::emitStructReaderWriter(
                     + ")");
     }
 
-    out.unindent();
-    out << "_hidl_error:\n";
-    out.indent();
     out << "return _hidl_err;\n";
 
     out.unindent();
     out << "}\n\n";
 }
 
-void CompoundType::emitResolveReferenceDef(
-        Formatter &out, const std::string prefix, bool isReader) const {
+void CompoundType::emitResolveReferenceDef(Formatter& out, const std::string& prefix,
+                                           bool isReader) const {
     out << "::android::status_t ";
     const std::string space(prefix.empty() ? "" : (prefix + "::"));
 
@@ -874,9 +968,6 @@ void CompoundType::emitResolveReferenceDef(
                 + error);
     }
 
-    out.unindent();
-    out << "_hidl_error:\n";
-    out.indent();
     out << "return _hidl_err;\n";
 
     out.unindent();
@@ -897,18 +988,18 @@ bool CompoundType::needsEmbeddedReadWrite() const {
     return false;
 }
 
-bool CompoundType::needsResolveReferences() const {
+bool CompoundType::deepNeedsResolveReferences(std::unordered_set<const Type*>* visited) const {
     if (mStyle != STYLE_STRUCT) {
         return false;
     }
 
     for (const auto &field : *mFields) {
-        if (field->type().needsResolveReferences()) {
+        if (field->type().needsResolveReferences(visited)) {
             return true;
         }
     }
 
-    return false;
+    return Scope::deepNeedsResolveReferences(visited);
 }
 
 bool CompoundType::resultNeedsDeref() const {
@@ -975,22 +1066,33 @@ status_t CompoundType::emitVtsAttributeType(Formatter &out) const {
     return OK;
 }
 
-bool CompoundType::isJavaCompatible() const {
-    if (mStyle != STYLE_STRUCT || !Scope::isJavaCompatible()) {
+bool CompoundType::deepIsJavaCompatible(std::unordered_set<const Type*>* visited) const {
+    if (mStyle != STYLE_STRUCT) {
         return false;
     }
 
-    for (const auto &field : *mFields) {
-        if (!field->type().isJavaCompatible()) {
+    for (const auto* field : *mFields) {
+        if (!field->get()->isJavaCompatible(visited)) {
             return false;
         }
     }
 
-    return true;
+    return Scope::deepIsJavaCompatible(visited);
+}
+
+bool CompoundType::deepContainsPointer(std::unordered_set<const Type*>* visited) const {
+    for (const auto* field : *mFields) {
+        if (field->get()->containsPointer(visited)) {
+            return true;
+        }
+    }
+
+    return Scope::deepContainsPointer(visited);
 }
 
 void CompoundType::getAlignmentAndSize(size_t *align, size_t *size) const {
     *align = 1;
+    *size = 0;
 
     size_t offset = 0;
     for (const auto &field : *mFields) {
@@ -1006,40 +1108,31 @@ void CompoundType::getAlignmentAndSize(size_t *align, size_t *size) const {
             offset += fieldAlign - pad;
         }
 
-        offset += fieldSize;
+        if (mStyle == STYLE_STRUCT) {
+            offset += fieldSize;
+        } else {
+            *size = std::max(*size, fieldSize);
+        }
 
         if (fieldAlign > (*align)) {
             *align = fieldAlign;
         }
     }
 
-    // Final padding to account for the structure's alignment.
-    size_t pad = offset % (*align);
-    if (pad > 0) {
-        offset += (*align) - pad;
+    if (mStyle == STYLE_STRUCT) {
+        *size = offset;
     }
 
-    *size = offset;
+    // Final padding to account for the structure's alignment.
+    size_t pad = (*size) % (*align);
+    if (pad > 0) {
+        (*size) += (*align) - pad;
+    }
 
     if (*size == 0) {
         // An empty struct still occupies a byte of space in C++.
         *size = 1;
     }
-}
-
-////////////////////////////////////////////////////////////////////////////////
-
-CompoundField::CompoundField(const char *name, Type *type)
-    : mName(name),
-      mType(type) {
-}
-
-std::string CompoundField::name() const {
-    return mName;
-}
-
-const Type &CompoundField::type() const {
-    return *mType;
 }
 
 }  // namespace android

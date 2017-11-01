@@ -17,19 +17,30 @@
 #include "Interface.h"
 
 #include "Annotation.h"
+#include "ArrayType.h"
+#include "ConstantExpression.h"
 #include "DeathRecipientType.h"
 #include "Method.h"
 #include "ScalarType.h"
 #include "StringType.h"
 #include "VectorType.h"
 
+#include <unistd.h>
+
+#include <iostream>
+#include <memory>
+#include <sstream>
+#include <unordered_map>
+
 #include <android-base/logging.h>
+#include <hidl-hash/Hash.h>
 #include <hidl-util/Formatter.h>
 #include <hidl-util/StringHelper.h>
-#include <iostream>
-#include <sstream>
 
 namespace android {
+
+#define B_PACK_CHARS(c1, c2, c3, c4) \
+         ((((c1)<<24)) | (((c2)<<16)) | (((c3)<<8)) | (c4))
 
 /* It is very important that these values NEVER change. These values
  * must remain unchanged over the lifetime of android. This is
@@ -40,50 +51,73 @@ namespace android {
  * work.
  */
 enum {
-    // These values are defined in hardware::IBinder.
     /////////////////// User defined transactions
     FIRST_CALL_TRANSACTION  = 0x00000001,
-    LAST_CALL_TRANSACTION   = 0x00efffff,
+    LAST_CALL_TRANSACTION   = 0x0effffff,
     /////////////////// HIDL reserved
-    FIRST_HIDL_TRANSACTION  = 0x00f00000,
-    HIDL_DESCRIPTOR_CHAIN_TRANSACTION = FIRST_HIDL_TRANSACTION,
-    HIDL_SYSPROPS_CHANGED_TRANSACTION,
-    HIDL_LINK_TO_DEATH_TRANSACTION,
-    HIDL_UNLINK_TO_DEATH_TRANSACTION,
-    HIDL_SET_HAL_INSTRUMENTATION_TRANSACTION,
-    LAST_HIDL_TRANSACTION   = 0x00ffffff,
+    FIRST_HIDL_TRANSACTION  = 0x0f000000,
+    HIDL_PING_TRANSACTION                     = B_PACK_CHARS(0x0f, 'P', 'N', 'G'),
+    HIDL_DESCRIPTOR_CHAIN_TRANSACTION         = B_PACK_CHARS(0x0f, 'C', 'H', 'N'),
+    HIDL_GET_DESCRIPTOR_TRANSACTION           = B_PACK_CHARS(0x0f, 'D', 'S', 'C'),
+    HIDL_SYSPROPS_CHANGED_TRANSACTION         = B_PACK_CHARS(0x0f, 'S', 'Y', 'S'),
+    HIDL_LINK_TO_DEATH_TRANSACTION            = B_PACK_CHARS(0x0f, 'L', 'T', 'D'),
+    HIDL_UNLINK_TO_DEATH_TRANSACTION          = B_PACK_CHARS(0x0f, 'U', 'T', 'D'),
+    HIDL_SET_HAL_INSTRUMENTATION_TRANSACTION  = B_PACK_CHARS(0x0f, 'I', 'N', 'T'),
+    HIDL_GET_REF_INFO_TRANSACTION             = B_PACK_CHARS(0x0f, 'R', 'E', 'F'),
+    HIDL_DEBUG_TRANSACTION                    = B_PACK_CHARS(0x0f, 'D', 'B', 'G'),
+    HIDL_HASH_CHAIN_TRANSACTION               = B_PACK_CHARS(0x0f, 'H', 'S', 'H'),
+    LAST_HIDL_TRANSACTION   = 0x0fffffff,
 };
 
-Interface::Interface(const char *localName, const Location &location, Interface *super)
-    : Scope(localName, location),
-      mSuperType(super),
-      mIsJavaCompatibleInProgress(false) {
-    mReservedMethods.push_back(createDescriptorChainMethod());
-    mReservedMethods.push_back(createSyspropsChangedMethod());
-    mReservedMethods.push_back(createLinkToDeathMethod());
-    mReservedMethods.push_back(createUnlinkToDeathMethod());
-    mReservedMethods.push_back(createSetHALInstrumentationMethod());
-}
+Interface::Interface(const char* localName, const FQName& fullName, const Location& location,
+                     Scope* parent, const Reference<Type>& superType)
+    : Scope(localName, fullName, location, parent), mSuperType(superType) {}
 
 std::string Interface::typeName() const {
     return "interface " + localName();
 }
 
-Method *Interface::createLinkToDeathMethod() const {
-    auto *results = new std::vector<TypedVar *> {
-        new TypedVar("success", new ScalarType(ScalarType::KIND_BOOL)) };
-    auto *args = new std::vector<TypedVar *> {
-        new TypedVar("recipient", new DeathRecipientType()),
-        new TypedVar("cookie", new ScalarType(ScalarType::KIND_UINT64)) };
+bool Interface::fillPingMethod(Method *method) const {
+    if (method->name() != "ping") {
+        return false;
+    }
 
-    return new Method("linkToDeath",
-            args,
-            results,
-            false /*oneway */,
-            new std::vector<Annotation *>(),
+    method->fillImplementation(
+        HIDL_PING_TRANSACTION,
+        {
+            {IMPL_INTERFACE,
+                [](auto &out) {
+                    out << "return ::android::hardware::Void();\n";
+                }
+            },
+            {IMPL_STUB_IMPL,
+                [](auto &out) {
+                    out << "return ::android::hardware::Void();\n";
+                }
+            }
+        }, /*cppImpl*/
+        {
+            {IMPL_INTERFACE,
+                [](auto &out) {
+                    out << "return;\n";
+                }
+            },
+            {IMPL_STUB, nullptr /* don't generate code */}
+        } /*javaImpl*/
+    );
+
+    return true;
+}
+
+bool Interface::fillLinkToDeathMethod(Method *method) const {
+    if (method->name() != "linkToDeath") {
+        return false;
+    }
+
+    method->fillImplementation(
             HIDL_LINK_TO_DEATH_TRANSACTION,
             {
-                {IMPL_HEADER,
+                {IMPL_INTERFACE,
                     [](auto &out) {
                         out << "(void)cookie;\n"
                             << "return (recipient != nullptr);\n";
@@ -103,35 +137,31 @@ Method *Interface::createLinkToDeathMethod() const {
                 {IMPL_STUB, nullptr}
             }, /*cppImpl*/
             {
-                {IMPL_HEADER,
-                    [this](auto &out) {
+                {IMPL_INTERFACE,
+                    [](auto &out) {
                         out << "return true;";
                     }
                 },
                 {IMPL_PROXY,
-                    [this](auto &out) {
+                    [](auto &out) {
                         out << "return mRemote.linkToDeath(recipient, cookie);\n";
                     }
                 },
                 {IMPL_STUB, nullptr}
             } /*javaImpl*/
     );
+    return true;
 }
 
-Method *Interface::createUnlinkToDeathMethod() const {
-    auto *results = new std::vector<TypedVar *> {
-        new TypedVar("success", new ScalarType(ScalarType::KIND_BOOL)) };
-    auto *args = new std::vector<TypedVar *> {
-        new TypedVar("recipient", new DeathRecipientType()) };
+bool Interface::fillUnlinkToDeathMethod(Method *method) const {
+    if (method->name() != "unlinkToDeath") {
+        return false;
+    }
 
-    return new Method("unlinkToDeath",
-            args,
-            results,
-            false /*oneway */,
-            new std::vector<Annotation *>(),
+    method->fillImplementation(
             HIDL_UNLINK_TO_DEATH_TRANSACTION,
             {
-                {IMPL_HEADER,
+                {IMPL_INTERFACE,
                     [](auto &out) {
                         out << "return (recipient != nullptr);\n";
                     }
@@ -156,54 +186,50 @@ Method *Interface::createUnlinkToDeathMethod() const {
                 {IMPL_STUB, nullptr /* don't generate code */}
             }, /*cppImpl*/
             {
-                {IMPL_HEADER,
-                    [this](auto &out) {
+                {IMPL_INTERFACE,
+                    [](auto &out) {
                         out << "return true;\n";
                     }
                 },
                 {IMPL_PROXY,
-                    [this](auto &out) {
+                    [](auto &out) {
                         out << "return mRemote.unlinkToDeath(recipient);\n";
                     }
                 },
                 {IMPL_STUB, nullptr /* don't generate code */}
             } /*javaImpl*/
     );
+    return true;
 }
-Method *Interface::createSyspropsChangedMethod() const {
-    return new Method("notifySyspropsChanged",
-            new std::vector<TypedVar *>() /*args */,
-            new std::vector<TypedVar *>() /*results */,
-            true /*oneway */,
-            new std::vector<Annotation *>(),
+bool Interface::fillSyspropsChangedMethod(Method *method) const {
+    if (method->name() != "notifySyspropsChanged") {
+        return false;
+    }
+
+    method->fillImplementation(
             HIDL_SYSPROPS_CHANGED_TRANSACTION,
-            { { IMPL_HEADER, [this](auto &out) {
+            { { IMPL_INTERFACE, [](auto &out) {
                 out << "::android::report_sysprop_change();\n";
                 out << "return ::android::hardware::Void();";
             } } }, /*cppImpl */
-            { { IMPL_HEADER, [](auto &out) { /* javaImpl */
-                out << "android.os.SystemProperties.reportSyspropChanged();";
+            { { IMPL_INTERFACE, [](auto &out) { /* javaImpl */
+                out << "android.os.HwBinder.reportSyspropChanged();";
             } } } /*javaImpl */
     );
+    return true;
 }
 
-Method *Interface::createSetHALInstrumentationMethod() const {
-    return new Method("setHALInstrumentation",
-            new std::vector<TypedVar *>() /*args */,
-            new std::vector<TypedVar *>() /*results */,
-            true /*oneway */,
-            new std::vector<Annotation *>(),
+bool Interface::fillSetHALInstrumentationMethod(Method *method) const {
+    if (method->name() != "setHALInstrumentation") {
+        return false;
+    }
+
+    method->fillImplementation(
             HIDL_SET_HAL_INSTRUMENTATION_TRANSACTION,
             {
-                {IMPL_HEADER,
-                    [this](auto &out) {
-                        // do nothing for base class.
-                        out << "return ::android::hardware::Void();\n";
-                    }
-                },
-                {IMPL_PROXY,
+                {IMPL_INTERFACE,
                     [](auto &out) {
-                        out << "configureInstrumentation();\n";
+                        // do nothing for base class.
                         out << "return ::android::hardware::Void();\n";
                     }
                 },
@@ -219,25 +245,21 @@ Method *Interface::createSetHALInstrumentationMethod() const {
                     }
                 },
             }, /*cppImpl */
-            { { IMPL_HEADER, [](auto & /*out*/) { /* javaImpl */
+            { { IMPL_INTERFACE, [](auto & /*out*/) { /* javaImpl */
                 // Not support for Java Impl for now.
             } } } /*javaImpl */
     );
+    return true;
 }
 
-Method *Interface::createDescriptorChainMethod() const {
-    VectorType *vecType = new VectorType();
-    vecType->setElementType(new StringType());
-    std::vector<TypedVar *> *results = new std::vector<TypedVar *>();
-    results->push_back(new TypedVar("indicator", vecType));
+bool Interface::fillDescriptorChainMethod(Method *method) const {
+    if (method->name() != "interfaceChain") {
+        return false;
+    }
 
-    return new Method("interfaceChain",
-        new std::vector<TypedVar *>() /* args */,
-        results,
-        false /* oneway */,
-        new std::vector<Annotation *>(),
+    method->fillImplementation(
         HIDL_DESCRIPTOR_CHAIN_TRANSACTION,
-        { { IMPL_HEADER, [this](auto &out) {
+        { { IMPL_INTERFACE, [this](auto &out) {
             std::vector<const Interface *> chain = typeChain();
             out << "_hidl_cb(";
             out.block([&] {
@@ -248,7 +270,7 @@ Method *Interface::createDescriptorChainMethod() const {
             out << ");\n";
             out << "return ::android::hardware::Void();";
         } } }, /* cppImpl */
-        { { IMPL_HEADER, [this](auto &out) {
+        { { IMPL_INTERFACE, [this](auto &out) {
             std::vector<const Interface *> chain = typeChain();
             out << "return new java.util.ArrayList<String>(java.util.Arrays.asList(\n";
             out.indent(); out.indent();
@@ -259,43 +281,337 @@ Method *Interface::createDescriptorChainMethod() const {
             }
             out << "));";
             out.unindent(); out.unindent();
-         } } } /* javaImpl */
+        } } } /* javaImpl */
     );
+    return true;
 }
 
+static void emitDigestChain(
+    Formatter& out, const std::string& prefix, const std::vector<const Interface*>& chain,
+    std::function<std::string(std::unique_ptr<ConstantExpression>)> byteToString) {
+    out.join(chain.begin(), chain.end(), ",\n", [&] (const auto &iface) {
+        const Hash &hash = Hash::getHash(iface->location().begin().filename());
+        out << prefix;
+        out << "{";
+        out.join(hash.raw().begin(), hash.raw().end(), ",", [&](const auto &e) {
+            // Use ConstantExpression::cppValue / javaValue
+            // because Java used signed byte for uint8_t.
+            out << byteToString(ConstantExpression::ValueOf(ScalarType::Kind::KIND_UINT8, e));
+        });
+        out << "} /* ";
+        out << hash.hexString();
+        out << " */";
+    });
+}
+
+bool Interface::fillHashChainMethod(Method *method) const {
+    if (method->name() != "getHashChain") {
+        return false;
+    }
+    const VectorType *chainType = static_cast<const VectorType *>(&method->results()[0]->type());
+    const ArrayType *digestType = static_cast<const ArrayType *>(chainType->getElementType());
+
+    method->fillImplementation(
+        HIDL_HASH_CHAIN_TRANSACTION,
+        { { IMPL_INTERFACE, [this, digestType](auto &out) {
+            std::vector<const Interface *> chain = typeChain();
+            out << "_hidl_cb(";
+            out.block([&] {
+                emitDigestChain(out, "(" + digestType->getInternalDataCppType() + ")", chain,
+                                [](const auto& e) { return e->cppValue(); });
+            });
+            out << ");\n";
+            out << "return ::android::hardware::Void();\n";
+        } } }, /* cppImpl */
+        { { IMPL_INTERFACE, [this, digestType, chainType](auto &out) {
+            std::vector<const Interface *> chain = typeChain();
+            out << "return new "
+                << chainType->getJavaType(false /* forInitializer */)
+                << "(java.util.Arrays.asList(\n";
+            out.indent(2, [&] {
+                // No need for dimensions when elements are explicitly provided.
+                emitDigestChain(out, "new " + digestType->getJavaType(false /* forInitializer */),
+                                chain, [](const auto& e) { return e->javaValue(); });
+            });
+            out << "));\n";
+        } } } /* javaImpl */
+    );
+    return true;
+}
+
+bool Interface::fillGetDescriptorMethod(Method *method) const {
+    if (method->name() != "interfaceDescriptor") {
+        return false;
+    }
+
+    method->fillImplementation(
+        HIDL_GET_DESCRIPTOR_TRANSACTION,
+        { { IMPL_INTERFACE, [this](auto &out) {
+            out << "_hidl_cb("
+                << fullName()
+                << "::descriptor);\n"
+                << "return ::android::hardware::Void();";
+        } } }, /* cppImpl */
+        { { IMPL_INTERFACE, [this](auto &out) {
+            out << "return "
+                << fullJavaName()
+                << ".kInterfaceName;\n";
+        } } } /* javaImpl */
+    );
+    return true;
+}
+
+bool Interface::fillGetDebugInfoMethod(Method *method) const {
+    if (method->name() != "getDebugInfo") {
+        return false;
+    }
+
+    static const std::string sArch =
+            "#if defined(__LP64__)\n"
+            "::android::hidl::base::V1_0::DebugInfo::Architecture::IS_64BIT\n"
+            "#else\n"
+            "::android::hidl::base::V1_0::DebugInfo::Architecture::IS_32BIT\n"
+            "#endif\n";
+
+    method->fillImplementation(
+        HIDL_GET_REF_INFO_TRANSACTION,
+        {
+            {IMPL_INTERFACE,
+                [](auto &out) {
+                    // getDebugInfo returns N/A for local objects.
+                    out << "_hidl_cb({ -1 /* pid */, 0 /* ptr */, \n"
+                        << sArch
+                        << "});\n"
+                        << "return ::android::hardware::Void();";
+                }
+            },
+            {IMPL_STUB_IMPL,
+                [](auto &out) {
+                    out << "_hidl_cb(";
+                    out.block([&] {
+                        out << "::android::hardware::details::debuggable()"
+                            << "? getpid() : -1 /* pid */,\n"
+                            << "::android::hardware::details::debuggable()"
+                            << "? reinterpret_cast<uint64_t>(this) : 0 /* ptr */,\n"
+                            << sArch << "\n";
+                    });
+                    out << ");\n"
+                        << "return ::android::hardware::Void();";
+                }
+            }
+        }, /* cppImpl */
+        { { IMPL_INTERFACE, [method](auto &out) {
+            const Type &refInfo = method->results().front()->type();
+            out << refInfo.getJavaType(false /* forInitializer */) << " info = new "
+                << refInfo.getJavaType(true /* forInitializer */) << "();\n"
+                // TODO(b/34777099): PID for java.
+                << "info.pid = -1;\n"
+                << "info.ptr = 0;\n"
+                << "info.arch = android.hidl.base.V1_0.DebugInfo.Architecture.UNKNOWN;"
+                << "return info;";
+        } } } /* javaImpl */
+    );
+
+    return true;
+}
+
+bool Interface::fillDebugMethod(Method *method) const {
+    if (method->name() != "debug") {
+        return false;
+    }
+
+    method->fillImplementation(
+        HIDL_DEBUG_TRANSACTION,
+        {
+            {IMPL_INTERFACE,
+                [](auto &out) {
+                    out << "(void)fd;\n"
+                        << "(void)options;\n"
+                        << "return ::android::hardware::Void();";
+                }
+            },
+        }, /* cppImpl */
+        {
+            /* unused, as the debug method is hidden from Java */
+        } /* javaImpl */
+    );
+
+    return true;
+}
+
+static std::map<std::string, Method *> gAllReservedMethods;
 
 bool Interface::addMethod(Method *method) {
     if (isIBase()) {
-        // ignore addMethod requests for IBase; they are all HIDL reserved methods.
+        if (!gAllReservedMethods.emplace(method->name(), method).second) {
+            std::cerr << "ERROR: hidl-gen encountered duplicated reserved method " << method->name()
+                      << std::endl;
+            return false;
+        }
+        // will add it in addAllReservedMethods
         return true;
     }
 
     CHECK(!method->isHidlReserved());
-    if (lookupMethod(method->name()) != nullptr) {
-        LOG(ERROR) << "Redefinition of method " << method->name();
-        return false;
-    }
-    size_t serial = FIRST_CALL_TRANSACTION;
-
-    serial += userDefinedMethods().size();
-
-    const Interface *ancestor = mSuperType;
-    while (ancestor != nullptr) {
-        serial += ancestor->userDefinedMethods().size();
-        ancestor = ancestor->superType();
-    }
-
-    CHECK(serial <= LAST_CALL_TRANSACTION) << "More than "
-            << LAST_CALL_TRANSACTION << " methods are not allowed.";
-    method->setSerialId(serial);
     mUserMethods.push_back(method);
 
     return true;
 }
 
+std::vector<const Reference<Type>*> Interface::getReferences() const {
+    std::vector<const Reference<Type>*> ret;
 
-const Interface *Interface::superType() const {
-    return mSuperType;
+    if (!isIBase()) {
+        ret.push_back(&mSuperType);
+    }
+
+    for (const auto* method : methods()) {
+        const auto& references = method->getReferences();
+        ret.insert(ret.end(), references.begin(), references.end());
+    }
+
+    return ret;
+}
+
+std::vector<const ConstantExpression*> Interface::getConstantExpressions() const {
+    std::vector<const ConstantExpression*> ret;
+    for (const auto* method : methods()) {
+        const auto& retMethod = method->getConstantExpressions();
+        ret.insert(ret.end(), retMethod.begin(), retMethod.end());
+    }
+    return ret;
+}
+
+std::vector<const Reference<Type>*> Interface::getStrongReferences() const {
+    // Interface is a special case as a reference:
+    // its definiton must be completed for extension but
+    // not necessary for other references.
+
+    std::vector<const Reference<Type>*> ret;
+    if (!isIBase()) {
+        ret.push_back(&mSuperType);
+    }
+
+    for (const auto* method : methods()) {
+        const auto& references = method->getStrongReferences();
+        ret.insert(ret.end(), references.begin(), references.end());
+    }
+
+    return ret;
+}
+
+status_t Interface::resolveInheritance() {
+    size_t serial = FIRST_CALL_TRANSACTION;
+    for (const auto* ancestor : superTypeChain()) {
+        serial += ancestor->mUserMethods.size();
+    }
+
+    for (Method* method : mUserMethods) {
+        if (serial > LAST_CALL_TRANSACTION) {
+            std::cerr << "ERROR: More than " << LAST_CALL_TRANSACTION
+                      << " methods (including super and reserved) are not allowed at " << location()
+                      << std::endl;
+            return UNKNOWN_ERROR;
+        }
+
+        method->setSerialId(serial);
+        serial++;
+    }
+
+    return Scope::resolveInheritance();
+}
+
+status_t Interface::validate() const {
+    CHECK(isIBase() == mSuperType.isEmptyReference());
+
+    if (!isIBase() && !mSuperType->isInterface()) {
+        std::cerr << "ERROR: You can only extend interfaces at " << mSuperType.location()
+                  << std::endl;
+        return UNKNOWN_ERROR;
+    }
+
+    status_t err = validateUniqueNames();
+    if (err != OK) return err;
+
+    return Scope::validate();
+}
+
+status_t Interface::validateUniqueNames() const {
+    std::unordered_map<std::string, const Interface*> registeredMethodNames;
+    for (auto const& tuple : allSuperMethodsFromRoot()) {
+        // No need to check super method uniqueness
+        registeredMethodNames[tuple.method()->name()] = tuple.interface();
+    }
+
+    for (const Method* method : mUserMethods) {
+        auto registered = registeredMethodNames.find(method->name());
+
+        if (registered != registeredMethodNames.end()) {
+            const Interface* definedInType = registered->second;
+
+            if (definedInType == this) {
+                // Defined in this interface
+                std::cerr << "ERROR: Redefinition of method '" << method->name() << "'";
+            } else if (definedInType->isIBase()) {
+                // Defined in IBase
+                std::cerr << "ERROR: Redefinition of reserved method '" << method->name() << "'";
+            } else {
+                // Defined in super not IBase
+                std::cerr << "ERROR: Redefinition of method '" << method->name()
+                          << "' defined in interface '" << definedInType->fullName() << "'";
+            }
+            std::cerr << " at " << method->location() << std::endl;
+            return UNKNOWN_ERROR;
+        }
+
+        registeredMethodNames[method->name()] = this;
+    }
+
+    return OK;
+}
+
+bool Interface::addAllReservedMethods() {
+    // use a sorted map to insert them in serial ID order.
+    std::map<int32_t, Method *> reservedMethodsById;
+    for (const auto &pair : gAllReservedMethods) {
+        Method *method = pair.second->copySignature();
+        bool fillSuccess = fillPingMethod(method)
+            || fillDescriptorChainMethod(method)
+            || fillGetDescriptorMethod(method)
+            || fillHashChainMethod(method)
+            || fillSyspropsChangedMethod(method)
+            || fillLinkToDeathMethod(method)
+            || fillUnlinkToDeathMethod(method)
+            || fillSetHALInstrumentationMethod(method)
+            || fillGetDebugInfoMethod(method)
+            || fillDebugMethod(method);
+
+        if (!fillSuccess) {
+            std::cerr << "ERROR: hidl-gen does not recognize a reserved method " << method->name()
+                      << std::endl;
+            return false;
+        }
+        if (!reservedMethodsById.emplace(method->getSerialId(), method).second) {
+            std::cerr << "ERROR: hidl-gen uses duplicated serial id for " << method->name()
+                      << " and " << reservedMethodsById[method->getSerialId()]->name()
+                      << ", serialId = " << method->getSerialId() << std::endl;
+            return false;
+        }
+    }
+    for (const auto &pair : reservedMethodsById) {
+        this->mReservedMethods.push_back(pair.second);
+    }
+    return true;
+}
+
+const Interface* Interface::superType() const {
+    if (isIBase()) return nullptr;
+    if (!mSuperType->isInterface()) {
+        // This is actually an error
+        // that would be caught in validate
+        return nullptr;
+    }
+    return static_cast<const Interface*>(mSuperType.get());
 }
 
 std::vector<const Interface *> Interface::typeChain() const {
@@ -303,13 +619,13 @@ std::vector<const Interface *> Interface::typeChain() const {
     const Interface *iface = this;
     while (iface != nullptr) {
         v.push_back(iface);
-        iface = iface->mSuperType;
+        iface = iface->superType();
     }
     return v;
 }
 
 std::vector<const Interface *> Interface::superTypeChain() const {
-    return superType()->typeChain(); // should work even if superType is nullptr
+    return isIBase() ? std::vector<const Interface*>() : superType()->typeChain();
 }
 
 bool Interface::isElidableType() const {
@@ -355,19 +671,16 @@ std::vector<InterfaceAndMethod> Interface::allMethodsFromRoot() const {
     return v;
 }
 
-Method *Interface::lookupMethod(std::string name) const {
-    for (const auto &tuple : allMethodsFromRoot()) {
-        Method *method = tuple.method();
-        if (method->name() == name) {
-            return method;
-        }
-    }
-
-    return nullptr;
+std::vector<InterfaceAndMethod> Interface::allSuperMethodsFromRoot() const {
+    return isIBase() ? std::vector<InterfaceAndMethod>() : superType()->allMethodsFromRoot();
 }
 
 std::string Interface::getBaseName() const {
     return fqName().getInterfaceBaseName();
+}
+
+std::string Interface::getAdapterName() const {
+    return fqName().getInterfaceAdapterName();
 }
 
 std::string Interface::getProxyName() const {
@@ -403,7 +716,7 @@ std::string Interface::getCppType(StorageMode mode,
     const std::string base =
           std::string(specifyNamespaces ? "::android::" : "")
         + "sp<"
-        + (specifyNamespaces ? fullName() : partialCppName())
+        + fullName()
         + ">";
 
     switch (mode) {
@@ -482,8 +795,6 @@ void Interface::emitReaderWriter(
             << "::android::hardware::toBinder<\n";
         out.indent(2, [&] {
             out << fqName().cppName()
-                << ", "
-                << getProxyFqName().cppName()
                 << ">("
                 << name
                 << ");\n";
@@ -504,6 +815,39 @@ void Interface::emitReaderWriter(
 
         handleError(out, mode);
     }
+}
+
+status_t Interface::emitGlobalTypeDeclarations(Formatter &out) const {
+    status_t status = Scope::emitGlobalTypeDeclarations(out);
+    if (status != OK) {
+        return status;
+    }
+    out << "std::string toString("
+        << getCppArgumentType()
+        << ");\n";
+    return OK;
+}
+
+status_t Interface::emitTypeDefinitions(Formatter& out, const std::string& prefix) const {
+    std::string space = prefix.empty() ? "" : (prefix + "::");
+    status_t err = Scope::emitTypeDefinitions(out, space + localName());
+    if (err != OK) {
+        return err;
+    }
+
+    out << "std::string toString("
+        << getCppArgumentType()
+        << " o) ";
+
+    out.block([&] {
+        out << "std::string os = \"[class or subclass of \";\n"
+            << "os += " << fullName() << "::descriptor;\n"
+            << "os += \"]\";\n"
+            << "os += o->isRemote() ? \"@remote\" : \"@local\";\n"
+            << "return os;\n";
+    }).endl().endl();
+
+    return OK;
 }
 
 void Interface::emitJavaReaderWriter(
@@ -588,14 +932,15 @@ status_t Interface::emitVtsMethodDeclaration(Formatter &out) const {
                 const AnnotationParam *param =
                         annotation->getParam("next");
                 if (param != nullptr) {
-                    for (auto value : *param->getValues()) {
+                    for (const auto& value : param->getValues()) {
                         out << "next: " << value << "\n";
                     }
                 }
             } else {
-                std::cerr << "Invalid annotation '"
-                          << name << "' for method: " << method->name()
-                          << ". Should be one of: entry, exit, callflow. \n";
+                std::cerr << "ERROR: Unrecognized annotation '" << name
+                          << "' for method: " << method->name()
+                          << ". A VTS annotation should be one of: "
+                          << "entry, exit, callflow." << std::endl;
                 return UNKNOWN_ERROR;
             }
             out.unindent();
@@ -610,11 +955,8 @@ status_t Interface::emitVtsMethodDeclaration(Formatter &out) const {
 status_t Interface::emitVtsAttributeType(Formatter &out) const {
     out << "type: " << getVtsType() << "\n"
         << "predefined_type: \""
-        << localName()
-        << "\"\n"
-        << "is_callback: "
-        << (StringHelper::EndsWith(localName(), "Callback") ? "true" : "false")
-        << "\n";
+        << fullName()
+        << "\"\n";
     return OK;
 }
 
@@ -634,37 +976,21 @@ bool Interface::hasOnewayMethods() const {
     return false;
 }
 
-bool Interface::isJavaCompatible() const {
-    if (mIsJavaCompatibleInProgress) {
-        // We're currently trying to determine if this Interface is
-        // java-compatible and something is referencing this interface through
-        // one of its methods. Assume we'll ultimately succeed, if we were wrong
-        // the original invocation of Interface::isJavaCompatible() will then
-        // return the correct "false" result.
-        return true;
-    }
-
-    if (mSuperType != nullptr && !mSuperType->isJavaCompatible()) {
-        mIsJavaCompatibleInProgress = false;
+bool Interface::deepIsJavaCompatible(std::unordered_set<const Type*>* visited) const {
+    if (superType() != nullptr && !superType()->isJavaCompatible(visited)) {
         return false;
     }
 
-    mIsJavaCompatibleInProgress = true;
-
-    if (!Scope::isJavaCompatible()) {
-        mIsJavaCompatibleInProgress = false;
-        return false;
-    }
-
-    for (const auto &method : methods()) {
-        if (!method->isJavaCompatible()) {
-            mIsJavaCompatibleInProgress = false;
+    for (const auto* method : methods()) {
+        if (!method->deepIsJavaCompatible(visited)) {
             return false;
         }
     }
 
-    mIsJavaCompatibleInProgress = false;
+    return Scope::isJavaCompatible(visited);
+}
 
+bool Interface::isNeverStrongReference() const {
     return true;
 }
 

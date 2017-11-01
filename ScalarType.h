@@ -37,19 +37,17 @@ struct ScalarType : public Type {
         KIND_DOUBLE,
     };
 
-    ScalarType(Kind kind);
+    ScalarType(Kind kind, Scope* parent);
 
     bool isScalar() const override;
 
     bool isElidableType() const override;
     const ScalarType *resolveToScalarType() const override;
 
-    bool canCheckEquality() const override;
+    bool deepCanCheckEquality(std::unordered_set<const Type*>* visited) const override;
 
     std::string typeName() const override;
     bool isValidEnumStorageType() const;
-
-    void addNamedTypesToSet(std::set<const FQName> &set) const override;
 
     std::string getCppType(
             StorageMode mode,
@@ -79,6 +77,15 @@ struct ScalarType : public Type {
             bool isReader,
             ErrorMode mode,
             bool needsCast) const;
+
+    void emitHexDump(
+            Formatter &out,
+            const std::string &streamName,
+            const std::string &name) const;
+
+    void emitConvertToJavaHexString(
+            Formatter &out,
+            const std::string &name) const;
 
     void emitJavaFieldReaderWriter(
             Formatter &out,

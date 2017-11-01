@@ -21,10 +21,10 @@
 
 namespace android {
 
-DeathRecipientType::DeathRecipientType() {}
+DeathRecipientType::DeathRecipientType(Scope* parent) : Type(parent) {}
 
-void DeathRecipientType::addNamedTypesToSet(std::set<const FQName> &) const {
-    // do nothing
+std::string DeathRecipientType::typeName() const {
+    return "death recipient";
 }
 
 std::string DeathRecipientType::getCppType(StorageMode mode,
@@ -71,10 +71,6 @@ bool DeathRecipientType::needsEmbeddedReadWrite() const {
 }
 
 bool DeathRecipientType::resultNeedsDeref() const {
-    return true;
-}
-
-bool DeathRecipientType::isJavaCompatible() const {
     return true;
 }
 

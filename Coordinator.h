@@ -19,32 +19,62 @@
 #define COORDINATOR_H_
 
 #include <android-base/macros.h>
-#include <functional>
+#include <hidl-util/FQName.h>
+#include <hidl-util/Formatter.h>
+#include <utils/Errors.h>
 #include <map>
 #include <set>
 #include <string>
-#include <utils/Errors.h>
 #include <vector>
 
 namespace android {
 
 struct AST;
-struct FQName;
 struct Type;
 
 struct Coordinator {
-    Coordinator(
-            const std::vector<std::string> &packageRootPaths,
-            const std::vector<std::string> &packageRoots);
+    Coordinator() {};
 
-    ~Coordinator();
+    const std::string &getRootPath() const;
+    void setRootPath(const std::string &rootPath);
+
+    void setVerbose(bool value);
+
+    // adds path only if it doesn't exist
+    status_t addPackagePath(const std::string& root, const std::string& path, std::string* error);
+    // adds path if it hasn't already been added
+    void addDefaultPackagePath(const std::string& root, const std::string& path);
+
+    enum class Location {
+        DIRECT,         // outputPath + file name
+        PACKAGE_ROOT,   // e.x. hal or other files within package root
+        GEN_OUTPUT,     // e.x. android/hardware/foo/1.0/*.cpp
+        GEN_SANITIZED,  // e.x. android/hardware/foo/V1_0/*.cpp
+    };
+
+    std::string getFilepath(const std::string& outputPath, const FQName& fqName, Location location,
+                            const std::string& fileName = "") const;
+
+    Formatter getFormatter(const std::string& outputPath, const FQName& fqName, Location location,
+                           const std::string& fileName) const;
+
+    // must be called before file access
+    void onFileAccess(const std::string& path, const std::string& mode) const;
+
+    enum class Enforce {
+        FULL,     // default
+        NO_HASH,  // only for use with -Lhash
+        NONE,     // only for use during enforcement
+    };
 
     // Attempts to parse the interface/types referred to by fqName.
     // Parsing an interface also parses the associated package's types.hal
     // file if it exists.
     // If "parsedASTs" is non-NULL, successfully parsed ASTs are inserted
     // into the set.
-    AST *parse(const FQName &fqName, std::set<AST *> *parsedASTs = nullptr);
+    // If !enforce, enforceRestrictionsOnPackage won't be run.
+    AST* parse(const FQName& fqName, std::set<AST*>* parsedASTs = nullptr,
+               Enforce enforcement = Enforce::FULL) const;
 
     // Given package-root paths of ["hardware/interfaces",
     // "vendor/<something>/interfaces"], package roots of
@@ -52,7 +82,6 @@ struct Coordinator {
     // FQName of "android.hardware.nfc@1.0::INfc, then getPackagePath()
     // will return "hardware/interfaces/nfc/1.0" (if sanitized = false)
     // or "hardware/interfaces/nfc/V1_0" (if sanitized = true).
-
     std::string getPackagePath(
             const FQName &fqName, bool relative = false,
             bool sanitized = false) const;
@@ -61,23 +90,10 @@ struct Coordinator {
     // "vendor.<something>.hardware"] and a FQName of
     // "android.hardware.nfc@1.0::INfc, then getPackageRoot() will
     // return "android.hardware".
-
     std::string getPackageRoot(const FQName &fqName) const;
-
-    // Given package-root paths of ["hardware/interfaces",
-    // "vendor/<something>/interfaces"], package roots of
-    // ["android.hardware", "vendor.<something>.hardware"], and a
-    // FQName of "android.hardware.nfc@1.0::INfc, then getPackageRootPath()
-    // will return "hardware/interfaces".
-
-    std::string getPackageRootPath(const FQName &fqName) const;
 
     // return getPackageRoot + ":" + getPackageRootPath
     std::string getPackageRootOption(const FQName &fqName) const;
-
-    // Given an FQName of "android.hardware.nfc@1.0::INfc", return
-    // "android/hardware/".
-    std::string convertPackageRootToPath(const FQName &fqName) const;
 
     status_t getPackageInterfaceFiles(
             const FQName &package,
@@ -87,21 +103,54 @@ struct Coordinator {
             const FQName &package,
             std::vector<FQName> *packageInterfaces) const;
 
-    static bool MakeParentHierarchy(const std::string &path);
+    status_t isTypesOnlyPackage(const FQName& package, bool* result) const;
+
+    // Enforce a set of restrictions on a set of packages. These include:
+    //    - minor version upgrades
+    // "packages" contains names like "android.hardware.nfc@1.1".
+    //    - hashing restrictions
+    status_t enforceRestrictionsOnPackage(const FQName& fqName,
+                                          Enforce enforcement = Enforce::FULL) const;
 
 private:
-    // A list of top-level directories (mPackageRootPaths)
-    // corresponding to a list of package roots (mPackageRoots). For
-    // example, if mPackageRootPaths[0] == "hardware/interfaces" and
-    // mPackageRoots[0] == "android.hardware" this means that all
-    // packages starting with "android.hardware" will be looked up in
-    // "hardware/interfaces".
-    std::vector<std::string> mPackageRootPaths;
-    std::vector<std::string> mPackageRoots;
-    std::map<FQName, AST *> mCache;
+    static bool MakeParentHierarchy(const std::string &path);
 
-    std::vector<std::string>::const_iterator findPackageRoot(
-            const FQName &fqName) const;
+    // indicates that packages in "android.hardware" will be looked up in hardware/interfaces
+    struct PackageRoot {
+        std::string path; // e.x. hardware/interfaces
+        FQName root; // e.x. android.hardware@0.0
+    };
+
+    const PackageRoot& findPackageRoot(const FQName& fqName) const;
+
+    // Given package-root paths of ["hardware/interfaces",
+    // "vendor/<something>/interfaces"], package roots of
+    // ["android.hardware", "vendor.<something>.hardware"], and a
+    // FQName of "android.hardware.nfc@1.0::INfc, then getPackageRootPath()
+    // will return "hardware/interfaces".
+    std::string getPackageRootPath(const FQName& fqName) const;
+
+    // Given an FQName of "android.hardware.nfc@1.0::INfc", return
+    // "android/hardware/".
+    std::string convertPackageRootToPath(const FQName& fqName) const;
+
+    std::vector<PackageRoot> mPackageRoots;
+    std::string mRootPath;
+    bool mVerbose;
+
+    // cache to parse().
+    mutable std::map<FQName, AST *> mCache;
+
+    // cache to enforceRestrictionsOnPackage().
+    mutable std::set<FQName> mPackagesEnforced;
+
+    // Returns the given path if it is absolute, otherwise it returns
+    // the path relative to mRootPath
+    std::string makeAbsolute(const std::string& string) const;
+
+    // Rules of enforceRestrictionsOnPackage are listed below.
+    status_t enforceMinorVersionUprevs(const FQName &fqName) const;
+    status_t enforceHashes(const FQName &fqName) const;
 
     DISALLOW_COPY_AND_ASSIGN(Coordinator);
 };

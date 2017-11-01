@@ -17,58 +17,106 @@
 #include "Method.h"
 
 #include "Annotation.h"
+#include "ConstantExpression.h"
 #include "ScalarType.h"
 #include "Type.h"
 
 #include <android-base/logging.h>
 #include <hidl-util/Formatter.h>
+#include <algorithm>
 
 namespace android {
 
-Method::Method(const char *name,
-       std::vector<TypedVar *> *args,
-       std::vector<TypedVar *> *results,
-       bool oneway,
-       std::vector<Annotation *> *annotations)
+Method::Method(const char* name, std::vector<NamedReference<Type>*>* args,
+               std::vector<NamedReference<Type>*>* results, bool oneway,
+               std::vector<Annotation*>* annotations, const Location& location)
     : mName(name),
       mArgs(args),
       mResults(results),
       mOneway(oneway),
-      mAnnotations(annotations) {
-}
+      mAnnotations(annotations),
+      mLocation(location) {}
 
-// HIDL reserved methods.
-Method::Method(const char *name,
-       std::vector<TypedVar *> *args,
-       std::vector<TypedVar *> *results,
-       bool oneway,
-       std::vector<Annotation *> *annotations,
-       size_t serial,
-       MethodImpl cppImpl,
-       MethodImpl javaImpl)
-    : Method(name, args, results, oneway, annotations) {
-
+void Method::fillImplementation(
+        size_t serial,
+        MethodImpl cppImpl,
+        MethodImpl javaImpl) {
     mIsHidlReserved = true;
     mSerial = serial;
     mCppImpl = cppImpl;
     mJavaImpl = javaImpl;
-}
 
+    CHECK(mJavaImpl.find(IMPL_STUB_IMPL) == mJavaImpl.end())
+            << "FATAL: mJavaImpl should not use IMPL_STUB_IMPL; use IMPL_INTERFACE instead.";
+    CHECK(mCppImpl.find(IMPL_STUB_IMPL) == mCppImpl.end() ||
+          mCppImpl.find(IMPL_STUB) == mCppImpl.end())
+            << "FATAL: mCppImpl IMPL_STUB will override IMPL_STUB_IMPL.";
+}
 
 std::string Method::name() const {
     return mName;
 }
 
-const std::vector<TypedVar *> &Method::args() const {
+const std::vector<NamedReference<Type>*>& Method::args() const {
     return *mArgs;
 }
 
-const std::vector<TypedVar *> &Method::results() const {
+const std::vector<NamedReference<Type>*>& Method::results() const {
     return *mResults;
 }
 
 const std::vector<Annotation *> &Method::annotations() const {
     return *mAnnotations;
+}
+
+std::vector<Reference<Type>*> Method::getReferences() {
+    const auto& constRet = static_cast<const Method*>(this)->getReferences();
+    std::vector<Reference<Type>*> ret(constRet.size());
+    std::transform(constRet.begin(), constRet.end(), ret.begin(),
+                   [](const auto* ref) { return const_cast<Reference<Type>*>(ref); });
+    return ret;
+}
+
+std::vector<const Reference<Type>*> Method::getReferences() const {
+    std::vector<const Reference<Type>*> ret;
+    ret.insert(ret.end(), mArgs->begin(), mArgs->end());
+    ret.insert(ret.end(), mResults->begin(), mResults->end());
+    return ret;
+}
+
+std::vector<Reference<Type>*> Method::getStrongReferences() {
+    const auto& constRet = static_cast<const Method*>(this)->getStrongReferences();
+    std::vector<Reference<Type>*> ret(constRet.size());
+    std::transform(constRet.begin(), constRet.end(), ret.begin(),
+                   [](const auto* ref) { return const_cast<Reference<Type>*>(ref); });
+    return ret;
+}
+
+std::vector<const Reference<Type>*> Method::getStrongReferences() const {
+    std::vector<const Reference<Type>*> ret;
+    for (const auto* ref : getReferences()) {
+        if (!ref->shallowGet()->isNeverStrongReference()) {
+            ret.push_back(ref);
+        }
+    }
+    return ret;
+}
+
+std::vector<ConstantExpression*> Method::getConstantExpressions() {
+    const auto& constRet = static_cast<const Method*>(this)->getConstantExpressions();
+    std::vector<ConstantExpression*> ret(constRet.size());
+    std::transform(constRet.begin(), constRet.end(), ret.begin(),
+                   [](const auto* ce) { return const_cast<ConstantExpression*>(ce); });
+    return ret;
+}
+
+std::vector<const ConstantExpression*> Method::getConstantExpressions() const {
+    std::vector<const ConstantExpression*> ret;
+    for (const auto* annotation : *mAnnotations) {
+        const auto& retAnnotation = annotation->getConstantExpressions();
+        ret.insert(ret.end(), retAnnotation.begin(), retAnnotation.end());
+    }
+    return ret;
 }
 
 void Method::cppImpl(MethodImplType type, Formatter &out) const {
@@ -91,6 +139,10 @@ void Method::javaImpl(MethodImplType type, Formatter &out) const {
     }
 }
 
+bool Method::isHiddenFromJava() const {
+    return isHidlReserved() && name() == "debug";
+}
+
 bool Method::overridesCppImpl(MethodImplType type) const {
     CHECK(mIsHidlReserved);
     return mCppImpl.find(type) != mCppImpl.end();
@@ -99,6 +151,10 @@ bool Method::overridesCppImpl(MethodImplType type) const {
 bool Method::overridesJavaImpl(MethodImplType type) const {
     CHECK(mIsHidlReserved);
     return mJavaImpl.find(type) != mJavaImpl.end();
+}
+
+Method *Method::copySignature() const {
+    return new Method(mName.c_str(), mArgs, mResults, mOneway, mAnnotations, Location());
 }
 
 void Method::setSerialId(size_t serial) {
@@ -110,14 +166,13 @@ size_t Method::getSerialId() const {
     return mSerial;
 }
 
-void Method::generateCppSignature(Formatter &out,
-                                  const std::string &className,
-                                  bool specifyNamespaces) const {
-    const bool returnsValue = !results().empty();
+bool Method::hasEmptyCppArgSignature() const {
+    return args().empty() && (results().empty() || canElideCallback() != nullptr);
+}
 
-    const TypedVar *elidedReturn = canElideCallback();
-
-    std::string space = (specifyNamespaces ? "::android::hardware::" : "");
+void Method::generateCppReturnType(Formatter &out, bool specifyNamespaces) const {
+    const NamedReference<Type>* elidedReturn = canElideCallback();
+    const std::string space = (specifyNamespaces ? "::android::hardware::" : "");
 
     if (elidedReturn == nullptr) {
         out << space << "Return<void> ";
@@ -127,15 +182,47 @@ void Method::generateCppSignature(Formatter &out,
             << elidedReturn->type().getCppResultType( specifyNamespaces)
             << "> ";
     }
+}
+
+void Method::generateCppSignature(Formatter &out,
+                                  const std::string &className,
+                                  bool specifyNamespaces) const {
+    generateCppReturnType(out, specifyNamespaces);
 
     if (!className.empty()) {
         out << className << "::";
     }
 
     out << name()
-        << "("
-        << GetArgSignature(args(), specifyNamespaces);
+        << "(";
+    emitCppArgSignature(out, specifyNamespaces);
+    out << ")";
+}
 
+static void emitCppArgResultSignature(Formatter& out,
+                                      const std::vector<NamedReference<Type>*>& args,
+                                      bool specifyNamespaces) {
+    out.join(args.begin(), args.end(), ", ", [&](auto arg) {
+        out << arg->type().getCppArgumentType(specifyNamespaces);
+        out << " ";
+        out << arg->name();
+    });
+}
+
+static void emitJavaArgResultSignature(Formatter& out,
+                                       const std::vector<NamedReference<Type>*>& args) {
+    out.join(args.begin(), args.end(), ", ", [&](auto arg) {
+        out << arg->type().getJavaType();
+        out << " ";
+        out << arg->name();
+    });
+}
+
+void Method::emitCppArgSignature(Formatter &out, bool specifyNamespaces) const {
+    emitCppArgResultSignature(out, args(), specifyNamespaces);
+
+    const bool returnsValue = !results().empty();
+    const NamedReference<Type>* elidedReturn = canElideCallback();
     if (returnsValue && elidedReturn == nullptr) {
         if (!args().empty()) {
             out << ", ";
@@ -143,47 +230,15 @@ void Method::generateCppSignature(Formatter &out,
 
         out << name() << "_cb _hidl_cb";
     }
-
-    out << ")";
 }
-
-// static
-std::string Method::GetArgSignature(const std::vector<TypedVar *> &args,
-                                    bool specifyNamespaces) {
-    bool first = true;
-    std::string out;
-    for (const auto &arg : args) {
-        if (!first) {
-            out += ", ";
-        }
-
-        out += arg->type().getCppArgumentType(specifyNamespaces);
-        out += " ";
-        out += arg->name();
-
-        first = false;
-    }
-
-    return out;
+void Method::emitCppResultSignature(Formatter &out, bool specifyNamespaces) const {
+    emitCppArgResultSignature(out, results(), specifyNamespaces);
 }
-
-// static
-std::string Method::GetJavaArgSignature(const std::vector<TypedVar *> &args) {
-    bool first = true;
-    std::string out;
-    for (const auto &arg : args) {
-        if (!first) {
-            out += ", ";
-        }
-
-        out += arg->type().getJavaType();
-        out += " ";
-        out += arg->name();
-
-        first = false;
-    }
-
-    return out;
+void Method::emitJavaArgSignature(Formatter &out) const {
+    emitJavaArgResultSignature(out, args());
+}
+void Method::emitJavaResultSignature(Formatter &out) const {
+    emitJavaArgResultSignature(out, results());
 }
 
 void Method::dumpAnnotations(Formatter &out) const {
@@ -201,29 +256,31 @@ void Method::dumpAnnotations(Formatter &out) const {
     out << "\n";
 }
 
-bool Method::isJavaCompatible() const {
-    for (const auto &arg : *mArgs) {
-        if (!arg->isJavaCompatible()) {
-            return false;
-        }
+bool Method::deepIsJavaCompatible(std::unordered_set<const Type*>* visited) const {
+    if (isHiddenFromJava()) {
+        return true;
     }
 
-    for (const auto &result : *mResults) {
-        if (!result->isJavaCompatible()) {
-            return false;
-        }
+    if (!std::all_of(mArgs->begin(), mArgs->end(),
+                     [&](const auto* arg) { return (*arg)->isJavaCompatible(visited); })) {
+        return false;
+    }
+
+    if (!std::all_of(mResults->begin(), mResults->end(),
+                     [&](const auto* arg) { return (*arg)->isJavaCompatible(visited); })) {
+        return false;
     }
 
     return true;
 }
 
-const TypedVar* Method::canElideCallback() const {
+const NamedReference<Type>* Method::canElideCallback() const {
     // Can't elide callback for void or tuple-returning methods
     if (mResults->size() != 1) {
         return nullptr;
     }
 
-    const TypedVar *typedVar = mResults->at(0);
+    const NamedReference<Type>* typedVar = mResults->at(0);
 
     if (typedVar->type().isElidableType()) {
         return typedVar;
@@ -232,27 +289,13 @@ const TypedVar* Method::canElideCallback() const {
     return nullptr;
 }
 
-////////////////////////////////////////////////////////////////////////////////
-
-TypedVar::TypedVar(const char *name, Type *type)
-    : mName(name),
-      mType(type) {
-}
-
-std::string TypedVar::name() const {
-    return mName;
-}
-
-const Type &TypedVar::type() const {
-    return *mType;
-}
-
-bool TypedVar::isJavaCompatible() const {
-    return mType->isJavaCompatible();
+const Location& Method::location() const {
+    return mLocation;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-bool TypedVarVector::add(TypedVar *v) {
+
+bool TypedVarVector::add(NamedReference<Type>* v) {
     if (mNames.emplace(v->name()).second) {
         push_back(v);
         return true;

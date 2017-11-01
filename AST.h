@@ -19,66 +19,113 @@
 #define AST_H_
 
 #include <android-base/macros.h>
+#include <hidl-util/FQName.h>
+#include <functional>
 #include <map>
 #include <set>
 #include <string>
 #include <vector>
 
-#include "FQName.h"
+#include "Scope.h"
 #include "Type.h"
 
 namespace android {
 
 struct Coordinator;
+struct ConstantExpression;
+struct EnumValue;
 struct Formatter;
 struct Interface;
 struct Location;
 struct Method;
 struct NamedType;
-struct TypedVar;
-struct Scope;
-struct EnumValue;
+template <class T>
+struct NamedReference;
+struct Type;
 
 struct AST {
-    AST(Coordinator *coordinator, const std::string &path);
-    ~AST();
+    AST(const Coordinator *coordinator, const std::string &path);
 
     bool setPackage(const char *package);
     bool addImport(const char *import);
 
     // package and version really.
     FQName package() const;
-    bool isInterface(std::string *ifaceName) const;
+    bool isInterface() const;
     bool containsInterfaces() const;
 
-    void enterScope(Scope *container);
-    void leaveScope();
-    Scope *scope();
+    // Adds package, version and scope stack to local name
+    FQName makeFullName(const char* localName, Scope* scope) const;
 
-    // Returns true iff successful.
-    bool addTypeDef(const char *localName, Type *type, const Location &location,
-            std::string *errorMsg);
-
-    // Returns true iff successful.
-    bool addScopedType(NamedType *type, std::string *errorMsg);
-
-    void *scanner();
-    void setScanner(void *scanner);
+    void addScopedType(NamedType* type, Scope* scope);
 
     const std::string &getFilename() const;
 
+    // Look up local identifier.
+    // It could be plain identifier or enum value as described by lookupEnumValue.
+    LocalIdentifier* lookupLocalIdentifier(const Reference<LocalIdentifier>& ref, Scope* scope);
+
     // Look up an enum value by "FQName:valueName".
-    EnumValue *lookupEnumValue(const FQName &fqName, std::string *errorMsg);
+    EnumValue* lookupEnumValue(const FQName& fqName, std::string* errorMsg, Scope* scope);
 
     // Look up a type by FQName, "pure" names, i.e. those without package
     // or version are first looked up in the current scope chain.
     // After that lookup proceeds to imports.
-    Type *lookupType(const FQName &fqName);
+    Type* lookupType(const FQName& fqName, Scope* scope);
 
     void addImportedAST(AST *ast);
 
+    // Calls all passes after parsing required before
+    // being ready to generate output.
+    status_t postParse();
+
+    // Recursive pass on constant expression tree
+    status_t constantExpressionRecursivePass(
+        const std::function<status_t(ConstantExpression*)>& func, bool processBeforeDependencies);
+
+    // Recursive tree pass that looks up all referenced types
+    status_t lookupTypes();
+
+    // Recursive tree pass that looks up all referenced local identifiers
+    status_t lookupLocalIdentifiers();
+
+    // Recursive tree pass that validates that all defined types
+    // have unique names in their scopes.
+    status_t validateDefinedTypesUniqueNames() const;
+
+    // Recursive tree pass that completes type declarations
+    // that depend on super types
+    status_t resolveInheritance();
+
+    // Recursive tree pass that evaluates constant expressions
+    status_t evaluate();
+
+    // Recursive tree pass that validates all type-related
+    // syntax restrictions
+    status_t validate() const;
+
+    // Recursive tree pass that ensures that type definitions and references
+    // are acyclic and reorderes type definitions in reversed topological order.
+    status_t topologicalReorder();
+
+    // Recursive tree pass that ensures that constant expressions
+    // are acyclic.
+    status_t checkAcyclicConstantExpressions() const;
+
+    // Recursive tree pass that checks C++ forward declaration restrictions.
+    status_t checkForwardReferenceRestrictions() const;
+
     status_t generateCpp(const std::string &outputPath) const;
+    status_t generateCppHeaders(const std::string &outputPath) const;
+    status_t generateCppSources(const std::string &outputPath) const;
+
     status_t generateCppImpl(const std::string &outputPath) const;
+    status_t generateCppImplHeader(const std::string& outputPath) const;
+    status_t generateCppImplSource(const std::string& outputPath) const;
+
+    status_t generateCppAdapter(const std::string& outputPath) const;
+    status_t generateCppAdapterHeader(const std::string& outputPath) const;
+    status_t generateCppAdapterSource(const std::string& outputPath) const;
 
     status_t generateJava(
             const std::string &outputPath,
@@ -100,10 +147,12 @@ struct AST {
 
     // Return the set of FQNames for those interfaces and types that are
     // actually referenced in the AST, not merely imported.
-
     const std::set<FQName>& getImportedNames() const {
         return mImportedNames;
     }
+
+    // Get transitive closure of imported interface/types.
+    void getAllImportedNames(std::set<FQName> *allImportSet) const;
 
     void appendToExportedTypesVector(
             std::vector<const Type *> *exportedTypes) const;
@@ -114,13 +163,22 @@ struct AST {
 
     bool isIBase() const;
 
-private:
-    Coordinator *mCoordinator;
-    std::string mPath;
-    std::vector<Scope *> mScopePath;
+    // or nullptr if not isInterface
+    const Interface *getInterface() const;
 
-    void *mScanner;
-    Scope *mRootScope;
+    // types or Interface base name (e.x. Foo)
+    std::string getBaseName() const;
+
+    Scope* getRootScope();
+
+    static void generateCppPackageInclude(Formatter& out, const FQName& package,
+                                          const std::string& klass);
+
+   private:
+    const Coordinator *mCoordinator;
+    std::string mPath;
+
+    RootScope mRootScope;
 
     FQName mPackage;
 
@@ -143,9 +201,10 @@ private:
     // used by the parser.
     size_t mSyntaxErrors = 0;
 
-    bool addScopedTypeInternal(
-            NamedType *type,
-            std::string *errorMsg);
+    // Helper functions for lookupType.
+    Type* lookupTypeLocally(const FQName& fqName, Scope* scope);
+    status_t lookupAutofilledType(const FQName &fqName, Type **returnedType);
+    Type *lookupTypeFromImports(const FQName &fqName);
 
     // Find a type matching fqName (which may be partial) and if found
     // return the associated type and fill in the full "matchingName".
@@ -157,11 +216,6 @@ private:
     void getPackageAndVersionComponents(
             std::vector<std::string> *components, bool cpp_compatible) const;
 
-    static void generateCppPackageInclude(
-            Formatter &out,
-            const FQName &package,
-            const std::string &klass);
-
     std::string makeHeaderGuard(const std::string &baseName,
                                 bool indicateGenerated = true) const;
     void enterLeaveNamespace(Formatter &out, bool enter) const;
@@ -172,7 +226,6 @@ private:
     status_t generateHwBinderHeader(const std::string &outputPath) const;
     status_t generateStubHeader(const std::string &outputPath) const;
     status_t generateProxyHeader(const std::string &outputPath) const;
-    status_t generateAllSource(const std::string &outputPath) const;
     status_t generatePassthroughHeader(const std::string &outputPath) const;
 
     status_t generateTypeSource(
@@ -183,19 +236,25 @@ private:
     // is effectively useless.
     using MethodGenerator = std::function<status_t(const Method *, const Interface *)>;
 
-    status_t generateStubImplHeader(const std::string &outputPath) const;
-    status_t generateStubImplSource(const std::string &outputPath) const;
+    void generateTemplatizationLink(Formatter& out) const;
+    void generateCppTag(Formatter& out, const std::string& tag) const;
 
-    status_t generateMethods(Formatter &out, MethodGenerator gen) const;
+    status_t generateMethods(Formatter &out,
+                             const MethodGenerator &gen,
+                             bool includeParents = true) const;
     status_t generateStubImplMethod(Formatter &out,
                                     const std::string &className,
                                     const Method *method) const;
     status_t generatePassthroughMethod(Formatter &out,
                                        const Method *method) const;
+    status_t generateStaticProxyMethodSource(Formatter &out,
+                                             const std::string &className,
+                                             const Method *method) const;
     status_t generateProxyMethodSource(Formatter &out,
                                        const std::string &className,
                                        const Method *method,
                                        const Interface *superInterface) const;
+    void generateAdapterMethod(Formatter& out, const Method* method) const;
 
     void generateFetchSymbol(Formatter &out, const std::string &ifaceName) const;
 
@@ -205,8 +264,12 @@ private:
     status_t generateStubSource(
             Formatter &out, const Interface *iface) const;
 
-    status_t generateStubSourceForMethod(
-            Formatter &out, const Interface *iface, const Method *method) const;
+    status_t generateStubSourceForMethod(Formatter &out,
+                                         const Method *method,
+                                         const Interface *superInterface) const;
+    status_t generateStaticStubMethodSource(Formatter &out,
+                                            const std::string &className,
+                                            const Method *method) const;
 
     status_t generatePassthroughSource(Formatter &out) const;
 
@@ -225,55 +288,34 @@ private:
         PASSTHROUGH_EXIT,
     };
 
-    status_t generateCppAtraceCall(
+    void generateCppAtraceCall(
             Formatter &out,
             InstrumentationEvent event,
             const Method *method) const;
 
-    status_t generateCppInstrumentationCall(
+    void generateCppInstrumentationCall(
             Formatter &out,
             InstrumentationEvent event,
             const Method *method) const;
 
-    void declareCppReaderLocals(
-            Formatter &out,
-            const std::vector<TypedVar *> &arg,
-            bool forResults) const;
+    void declareCppReaderLocals(Formatter& out, const std::vector<NamedReference<Type>*>& arg,
+                                bool forResults) const;
 
-    void emitCppReaderWriter(
-            Formatter &out,
-            const std::string &parcelObj,
-            bool parcelObjIsPointer,
-            const TypedVar *arg,
-            bool isReader,
-            Type::ErrorMode mode,
-            bool addPrefixToName) const;
+    void emitCppReaderWriter(Formatter& out, const std::string& parcelObj, bool parcelObjIsPointer,
+                             const NamedReference<Type>* arg, bool isReader, Type::ErrorMode mode,
+                             bool addPrefixToName) const;
 
-    void emitCppResolveReferences(
-            Formatter &out,
-            const std::string &parcelObj,
-            bool parcelObjIsPointer,
-            const TypedVar *arg,
-            bool isReader,
-            Type::ErrorMode mode,
-            bool addPrefixToName) const;
+    void emitCppResolveReferences(Formatter& out, const std::string& parcelObj,
+                                  bool parcelObjIsPointer, const NamedReference<Type>* arg,
+                                  bool isReader, Type::ErrorMode mode, bool addPrefixToName) const;
 
-    void emitJavaReaderWriter(
-            Formatter &out,
-            const std::string &parcelObj,
-            const TypedVar *arg,
-            bool isReader,
-            bool addPrefixToName) const;
+    void emitJavaReaderWriter(Formatter& out, const std::string& parcelObj,
+                              const NamedReference<Type>* arg, bool isReader,
+                              bool addPrefixToName) const;
 
     status_t emitTypeDeclarations(Formatter &out) const;
     status_t emitJavaTypeDeclarations(Formatter &out) const;
     status_t emitVtsTypeDeclarations(Formatter &out) const;
-
-    // Helper function that generates vts type declaration from the current
-    // AST and the transitive closure of imported ASTs.
-    status_t emitVtsTypeDeclarationsHelper(
-                Formatter &out,
-                std::set<AST*> *allImportSet) const;
 
     DISALLOW_COPY_AND_ASSIGN(AST);
 };

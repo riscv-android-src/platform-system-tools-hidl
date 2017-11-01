@@ -18,21 +18,25 @@
 
 #define VECTOR_TYPE_H_
 
+#include <vector>
+
+#include "Reference.h"
 #include "Type.h"
 
 namespace android {
 
 struct VectorType : public TemplatedType {
-    VectorType();
+    VectorType(Scope* parent);
 
     bool isVector() const override;
     bool isVectorOfBinders() const;
-    std::string typeName() const override;
-    bool isCompatibleElementType(Type *elementType) const override;
 
-    bool canCheckEquality() const override;
+    std::string templatedTypeName() const override;
+    bool isCompatibleElementType(const Type* elementType) const override;
 
-    void addNamedTypesToSet(std::set<const FQName> &set) const override;
+    std::vector<const Reference<Type>*> getStrongReferences() const override;
+
+    bool deepCanCheckEquality(std::unordered_set<const Type*>* visited) const override;
 
     std::string getCppType(
             StorageMode mode,
@@ -41,6 +45,7 @@ struct VectorType : public TemplatedType {
     std::string getJavaType(bool forInitializer) const override;
 
     std::string getVtsType() const override;
+    std::string getVtsValueName() const override;
 
     void emitReaderWriter(
             Formatter &out,
@@ -116,16 +121,14 @@ struct VectorType : public TemplatedType {
             bool isReader);
 
     bool needsEmbeddedReadWrite() const override;
-    bool needsResolveReferences() const override;
+    bool deepNeedsResolveReferences(std::unordered_set<const Type*>* visited) const override;
     bool resultNeedsDeref() const override;
 
-    status_t emitVtsTypeDeclarations(Formatter &out) const override;
-    status_t emitVtsAttributeType(Formatter &out) const override;
-
-    bool isJavaCompatible() const override;
+    bool deepIsJavaCompatible(std::unordered_set<const Type*>* visited) const override;
+    bool deepContainsPointer(std::unordered_set<const Type*>* visited) const override;
 
     void getAlignmentAndSize(size_t *align, size_t *size) const override;
-
+    static void getAlignmentAndSizeStatic(size_t *align, size_t *size);
  private:
     // Helper method for emitResolveReferences[Embedded].
     // Pass empty childName and childOffsetText if the original

@@ -18,12 +18,17 @@ package com.android.commands.hidl_test_java;
 
 import android.hardware.tests.baz.V1_0.IBase;
 import android.hardware.tests.baz.V1_0.IBaz;
+import android.hardware.tests.baz.V1_0.IQuux;
+import android.hardware.tests.baz.V1_0.IBaz.NestedStruct;
 import android.hardware.tests.baz.V1_0.IBazCallback;
 import android.os.HwBinder;
 import android.os.RemoteException;
+import android.os.HidlSupport;
 import android.util.Log;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.NoSuchElementException;
 
 public final class HidlTestJava {
     private static final String TAG = "HidlTestJava";
@@ -33,6 +38,7 @@ public final class HidlTestJava {
         try {
             exitCode = new HidlTestJava().run(args);
         } catch (Exception e) {
+            e.printStackTrace();
             Log.e(TAG, "Error ", e);
         }
         System.exit(exitCode);
@@ -45,277 +51,11 @@ public final class HidlTestJava {
             server();
         } else {
             Log.e(TAG, "Usage: HidlTestJava  -c(lient) | -s(erver)");
+            System.err.printf("Usage: HidlTestJava  -c(lient) | -s(erver)\n");
             return 1;
         }
 
         return 0;
-    }
-
-    public static String toString(IBase.Foo.Bar bar) {
-        StringBuilder builder = new StringBuilder();
-        builder.append("Bar(");
-        builder.append("z = ");
-        builder.append(bar.z);
-        builder.append(", ");
-        builder.append("s = ");
-        builder.append(toString(bar.s));
-        builder.append(")");
-
-        return builder.toString();
-    }
-
-    public static String toString(IBase.Foo foo) {
-        StringBuilder builder = new StringBuilder();
-        builder.append("Foo(");
-        builder.append("x = ");
-        builder.append(foo.x);
-        builder.append(", ");
-        builder.append("y = ");
-        builder.append(toString(foo.y));
-        builder.append(", ");
-        builder.append("aaa = ");
-        builder.append(toString(foo.aaa));
-        builder.append(")");
-
-        return builder.toString();
-    }
-
-    public static String toString(ArrayList<IBase.Foo.Bar> vec) {
-        StringBuilder builder = new StringBuilder();
-        builder.append("[");
-        for (int i = 0; i < vec.size(); ++i) {
-            if (i > 0) {
-                builder.append(", ");
-            }
-            builder.append(toString(vec.get(i)));
-        }
-        builder.append("]");
-
-        return builder.toString();
-    }
-
-    public static String fooVecToString(ArrayList<IBase.Foo> vec) {
-        StringBuilder builder = new StringBuilder();
-        builder.append("[");
-        for (int i = 0; i < vec.size(); ++i) {
-            if (i > 0) {
-                builder.append(", ");
-            }
-            builder.append(toString(vec.get(i)));
-        }
-        builder.append("]");
-
-        return builder.toString();
-    }
-
-    public static String macAddressVecToString(ArrayList<byte[]> vec) {
-        StringBuilder builder = new StringBuilder();
-        builder.append("[");
-        for (int i = 0; i < vec.size(); ++i) {
-            if (i > 0) {
-                builder.append(", ");
-            }
-            builder.append(toString(vec.get(i)));
-        }
-        builder.append("]");
-
-        return builder.toString();
-    }
-
-    public static String booleanVecToString(ArrayList<Boolean> vec) {
-        StringBuilder builder = new StringBuilder();
-        builder.append("[");
-        for (int i = 0; i < vec.size(); ++i) {
-            if (i > 0) {
-                builder.append(", ");
-            }
-            builder.append(toString(vec.get(i)));
-        }
-        builder.append("]");
-
-        return builder.toString();
-    }
-
-    public static String integerVecToString(ArrayList<Integer> vec) {
-        StringBuilder builder = new StringBuilder();
-        builder.append("[");
-        for (int i = 0; i < vec.size(); ++i) {
-            if (i > 0) {
-                builder.append(", ");
-            }
-            builder.append(toString(vec.get(i)));
-        }
-        builder.append("]");
-
-        return builder.toString();
-    }
-
-    public static String stringVecToString(ArrayList<String> vec) {
-        StringBuilder builder = new StringBuilder();
-        builder.append("[");
-        for (int i = 0; i < vec.size(); ++i) {
-            if (i > 0) {
-                builder.append(", ");
-            }
-            builder.append(toString(vec.get(i)));
-        }
-        builder.append("]");
-
-        return builder.toString();
-    }
-
-    public static String toString(IBase.Foo[] array) {
-        StringBuilder builder = new StringBuilder();
-        builder.append("[");
-        for (int i = 0; i < array.length; ++i) {
-            if (i > 0) {
-                builder.append(", ");
-            }
-            builder.append(toString(array[i]));
-        }
-        builder.append("]");
-
-        return builder.toString();
-    }
-
-    public static String toString(IBase.Foo.Bar[] array) {
-        StringBuilder builder = new StringBuilder();
-        builder.append("[");
-        for (int i = 0; i < array.length; ++i) {
-            if (i > 0) {
-                builder.append(", ");
-            }
-            builder.append(toString(array[i]));
-        }
-        builder.append("]");
-
-        return builder.toString();
-    }
-
-    public static String toString(int[] val) {
-        StringBuilder builder = new StringBuilder();
-        builder.append("[");
-        for (int i = 0; i < val.length; ++i) {
-            if (i > 0) {
-                builder.append(", ");
-            }
-            builder.append(val[i]);
-        }
-        builder.append("]");
-
-        return builder.toString();
-    }
-
-    public static String toString(boolean[] val) {
-        StringBuilder builder = new StringBuilder();
-        builder.append("[");
-        for (int i = 0; i < val.length; ++i) {
-            if (i > 0) {
-                builder.append(", ");
-            }
-            builder.append(val[i] ? "true" : "false");
-        }
-        builder.append("]");
-
-        return builder.toString();
-    }
-
-    public static String toString(String[] val) {
-        StringBuilder builder = new StringBuilder();
-        builder.append("[");
-        for (int i = 0; i < val.length; ++i) {
-            if (i > 0) {
-                builder.append(", ");
-            }
-            builder.append(toString(val[i]));
-        }
-        builder.append("]");
-
-        return builder.toString();
-    }
-
-    public static String toString(byte[] val) {
-        StringBuilder builder = new StringBuilder();
-        for (int i = 0; i < val.length; ++i) {
-            if (i > 0) {
-                builder.append(":");
-            }
-
-            byte b = val[i];
-            if (b < 16) {
-                builder.append("0");
-            }
-            builder.append(Integer.toHexString(b));
-        }
-
-        return builder.toString();
-    }
-
-    public static String toString(boolean x) {
-        return x ? "true" : "false";
-    }
-
-    public static String toString(int x) {
-        return Integer.toString(x);
-    }
-
-    public static String toString(double x) {
-        return Double.toString(x);
-    }
-
-    public static String toString(String s) {
-        return "'" + s + "'";
-    }
-
-    public static String toString(String[][] M) {
-        StringBuilder builder = new StringBuilder();
-
-        builder.append("[");
-        for (int i = 0; i < M.length; ++i) {
-            if (i > 0) {
-                builder.append(", ");
-            }
-            builder.append(toString(M[i]));
-        }
-        builder.append("]");
-
-        return builder.toString();
-    }
-
-    public static String toString(IBase.StringMatrix5x3 M) {
-        return toString(M.s);
-    }
-
-    public static String toString(IBase.StringMatrix3x5 M) {
-        return toString(M.s);
-    }
-
-    public static String toString(IBase.VectorOfArray vec) {
-        StringBuilder out = new StringBuilder();
-
-        out.append("VectorOfArray(");
-        for (int i = 0; i < vec.addresses.size(); ++i) {
-            if (i > 0) {
-                out.append(", ");
-            }
-
-            byte[] address = vec.addresses.get(i);
-
-            for (int j = 0; j < 6; ++j) {
-                if (j > 0) {
-                    out.append(":");
-                }
-
-                byte b = address[j];
-                if (b < 16) {
-                    out.append("0");
-                }
-                out.append(Integer.toHexString(b));
-            }
-        }
-
-        out.append(")");
-        return out.toString();
     }
 
     final class HidlDeathRecipient implements HwBinder.DeathRecipient {
@@ -361,11 +101,16 @@ public final class HidlTestJava {
         throw new RuntimeException();
     }
 
+    private void ExpectFalse(boolean x) {
+        ExpectTrue(!x);
+    }
+
     private void Expect(String result, String s) {
         if (result.equals(s)) {
             return;
         }
 
+        System.err.printf("Expected '%s', got '%s'\n", s, result);
         Log.e(TAG, "Expected '" + s + "', got '" + result + "'");
         throw new RuntimeException();
     }
@@ -438,15 +183,96 @@ public final class HidlTestJava {
         return "positively huge!";
     }
 
+    private void ExpectDeepEq(Object l, Object r) {
+        ExpectTrue(HidlSupport.deepEquals(l, r));
+        ExpectTrue(HidlSupport.deepHashCode(l) == HidlSupport.deepHashCode(r));
+    }
+
+    private void ExpectDeepNe(Object l, Object r) {
+        ExpectTrue(!HidlSupport.deepEquals(l, r));
+    }
+
     private void client() throws RemoteException {
+
+        ExpectDeepEq(null, null);
+        ExpectDeepNe(null, new String());
+        ExpectDeepNe(new String(), null);
+        ExpectDeepEq(new String(), new String());
+        ExpectDeepEq("hey", "hey");
+
+        ExpectDeepEq(new int[]{1,2}, new int[]{1,2});
+        ExpectDeepNe(new int[]{1,2}, new int[]{1,3});
+        ExpectDeepNe(new int[]{1,2}, new int[]{1,2,3});
+        ExpectDeepEq(new int[][]{{1,2},{3,4}}, new int[][]{{1,2},{3,4}});
+        ExpectDeepNe(new int[][]{{1,2},{3,4}}, new int[][]{{1,2},{3,5}});
+        ExpectDeepNe(new int[][]{{1,2},{3,4}}, new int[][]{{1,2,3},{4,5,6}});
+        ExpectDeepNe(new int[][]{{1,2},{3,4}}, new int[][]{{1,2},{3,4,5}});
+
+        ExpectDeepEq(new Integer[]{1,2}, new Integer[]{1,2});
+        ExpectDeepNe(new Integer[]{1,2}, new Integer[]{1,3});
+        ExpectDeepNe(new Integer[]{1,2}, new Integer[]{1,2,3});
+        ExpectDeepEq(new Integer[][]{{1,2},{3,4}}, new Integer[][]{{1,2},{3,4}});
+        ExpectDeepNe(new Integer[][]{{1,2},{3,4}}, new Integer[][]{{1,2},{3,5}});
+        ExpectDeepNe(new Integer[][]{{1,2},{3,4}}, new Integer[][]{{1,2,3},{4,5,6}});
+        ExpectDeepNe(new Integer[][]{{1,2},{3,4}}, new Integer[][]{{1,2},{3,4,5}});
+
+        ExpectDeepEq(new ArrayList(Arrays.asList(1, 2)),
+                     new ArrayList(Arrays.asList(1, 2)));
+        ExpectDeepNe(new ArrayList(Arrays.asList(1, 2)),
+                     new ArrayList(Arrays.asList(1, 2, 3)));
+
+        ExpectDeepEq(new ArrayList(Arrays.asList(new int[]{1,2}, new int[]{3,4})),
+                     new ArrayList(Arrays.asList(new int[]{1,2}, new int[]{3,4})));
+        ExpectDeepNe(new ArrayList(Arrays.asList(new int[]{1,2}, new int[]{3,4})),
+                     new ArrayList(Arrays.asList(new int[]{1,2}, new int[]{3,5})));
+
+        ExpectDeepEq(new ArrayList(Arrays.asList(new Integer[]{1,2}, new Integer[]{3,4})),
+                     new ArrayList(Arrays.asList(new Integer[]{1,2}, new Integer[]{3,4})));
+        ExpectDeepNe(new ArrayList(Arrays.asList(new Integer[]{1,2}, new Integer[]{3,4})),
+                     new ArrayList(Arrays.asList(new Integer[]{1,2}, new Integer[]{3,5})));
+
+        ExpectDeepEq(new ArrayList[]{new ArrayList(Arrays.asList(1,2)),
+                                     new ArrayList(Arrays.asList(3,4))},
+                     new ArrayList[]{new ArrayList(Arrays.asList(1,2)),
+                                     new ArrayList(Arrays.asList(3,4))});
+
+        {
+            // Test proper exceptions are thrown
+            try {
+                IBase proxy = IBase.getService("this-doesn't-exist");
+            } catch (Exception e) {
+                ExpectTrue(e instanceof NoSuchElementException);
+            }
+        }
+
         {
             // Test access through base interface binder.
             IBase baseProxy = IBase.getService("baz");
             baseProxy.someBaseMethod();
+
+            IBaz bazProxy = IBaz.castFrom(baseProxy);
+            ExpectTrue(bazProxy != null);
+
+            // IQuux is completely unrelated to IBase/IBaz, so the following
+            // should fail, i.e. return null.
+            IQuux quuxProxy = IQuux.castFrom(baseProxy);
+            ExpectTrue(quuxProxy == null);
+        }
+
+        {
+            // Test waiting API
+            IBase baseProxyA = IBaz.getService("baz", true /* retry */);
+            ExpectTrue(baseProxyA != null);
+            IBase baseProxyB = IBaz.getService("baz", false /* retry */);
+            ExpectTrue(baseProxyB != null);
         }
 
         IBaz proxy = IBaz.getService("baz");
         proxy.someBaseMethod();
+
+        {
+            Expect(proxy.interfaceDescriptor(), IBaz.kInterfaceName);
+        }
 
         {
             IBase.Foo foo = new IBase.Foo();
@@ -463,15 +289,7 @@ public final class HidlTestJava {
             foo.y.s = "Lorem ipsum...";
 
             IBase.Foo result = proxy.someOtherBaseMethod(foo);
-
-            Expect(toString(result),
-                   "Foo(x = 1, " +
-                       "y = Bar(z = 3.14, s = 'Lorem ipsum...'), " +
-                       "aaa = [Bar(z = 1.0, s = 'Hello, world 0'), " +
-                              "Bar(z = 1.01, s = 'Hello, world 1'), " +
-                              "Bar(z = 1.02, s = 'Hello, world 2'), " +
-                              "Bar(z = 1.03, s = 'Hello, world 3'), " +
-                              "Bar(z = 1.04, s = 'Hello, world 4')])");
+            ExpectTrue(result.equals(foo));
         }
 
         {
@@ -507,21 +325,13 @@ public final class HidlTestJava {
 
             inputArray[1] = foo;
 
+            IBase.Foo[] expectedOutputArray = new IBase.Foo[2];
+            expectedOutputArray[0] = inputArray[1];
+            expectedOutputArray[1] = inputArray[0];
+
             IBase.Foo[] outputArray = proxy.someMethodWithFooArrays(inputArray);
 
-            Expect(toString(outputArray),
-                   "[Foo(x = 2, " +
-                        "y = Bar(z = 1.1414, s = 'Et tu brute?'), " +
-                        "aaa = [Bar(z = 2.0, s = 'Lorem ipsum 0'), " +
-                               "Bar(z = 1.99, s = 'Lorem ipsum 1'), " +
-                               "Bar(z = 1.98, s = 'Lorem ipsum 2')]), " +
-                     "Foo(x = 1, " +
-                         "y = Bar(z = 3.14, s = 'Lorem ipsum...'), " +
-                         "aaa = [Bar(z = 1.0, s = 'Hello, world 0'), " +
-                                "Bar(z = 1.01, s = 'Hello, world 1'), " +
-                                "Bar(z = 1.02, s = 'Hello, world 2'), " +
-                                "Bar(z = 1.03, s = 'Hello, world 3'), " +
-                                "Bar(z = 1.04, s = 'Hello, world 4')])]");
+            ExpectTrue(java.util.Objects.deepEquals(outputArray, expectedOutputArray));
         }
 
         {
@@ -557,22 +367,14 @@ public final class HidlTestJava {
 
             inputVec.add(foo);
 
+            ArrayList<IBase.Foo> expectedOutputVec = new ArrayList<IBase.Foo>();
+            expectedOutputVec.add(inputVec.get(1));
+            expectedOutputVec.add(inputVec.get(0));
+
             ArrayList<IBase.Foo> outputVec =
                 proxy.someMethodWithFooVectors(inputVec);
 
-            Expect(fooVecToString(outputVec),
-                   "[Foo(x = 2, " +
-                        "y = Bar(z = 1.1414, s = 'Et tu brute?'), " +
-                        "aaa = [Bar(z = 2.0, s = 'Lorem ipsum 0'), " +
-                               "Bar(z = 1.99, s = 'Lorem ipsum 1'), " +
-                               "Bar(z = 1.98, s = 'Lorem ipsum 2')]), " +
-                     "Foo(x = 1, " +
-                         "y = Bar(z = 3.14, s = 'Lorem ipsum...'), " +
-                         "aaa = [Bar(z = 1.0, s = 'Hello, world 0'), " +
-                                "Bar(z = 1.01, s = 'Hello, world 1'), " +
-                                "Bar(z = 1.02, s = 'Hello, world 2'), " +
-                                "Bar(z = 1.03, s = 'Hello, world 3'), " +
-                                "Bar(z = 1.04, s = 'Hello, world 4')])]");
+            ExpectTrue(java.util.Objects.deepEquals(outputVec, expectedOutputVec));
         }
 
         {
@@ -588,13 +390,15 @@ public final class HidlTestJava {
                 in.addresses.add(mac);
             }
 
-            IBase.VectorOfArray out = proxy.someMethodWithVectorOfArray(in);
+            IBase.VectorOfArray expectedOut = new IBase.VectorOfArray();
+            int n = in.addresses.size();
 
-            Expect(toString(out),
-                   "VectorOfArray("
-                     + "0c:0d:0e:0f:10:11, "
-                     + "06:07:08:09:0a:0b, "
-                     + "00:01:02:03:04:05)");
+            for (int i = 0; i < n; ++i) {
+                expectedOut.addresses.add(in.addresses.get(n - 1 - i));
+            }
+
+            IBase.VectorOfArray out = proxy.someMethodWithVectorOfArray(in);
+            ExpectTrue(out.equals(expectedOut));
         }
 
         {
@@ -610,17 +414,29 @@ public final class HidlTestJava {
                 in.add(mac);
             }
 
+            ArrayList<byte[]> expectedOut = new ArrayList<byte[]>();
+
+            int n = in.size();
+            for (int i = 0; i < n; ++i) {
+                expectedOut.add(in.get(n - 1 - i));
+            }
+
             ArrayList<byte[]> out = proxy.someMethodTakingAVectorOfArray(in);
 
-            Expect(macAddressVecToString(out),
-                   "[0c:0d:0e:0f:10:11, 06:07:08:09:0a:0b, 00:01:02:03:04:05]");
+            ExpectTrue(out.size() == expectedOut.size());
+            for  (int i = 0; i < n; ++i) {
+                ExpectTrue(java.util.Objects.deepEquals(out.get(i), expectedOut.get(i)));
+            }
         }
 
         {
             IBase.StringMatrix5x3 in = new IBase.StringMatrix5x3();
+            IBase.StringMatrix3x5 expectedOut = new IBase.StringMatrix3x5();
+
             for (int i = 0; i < 5; ++i) {
                 for (int j = 0; j < 3; ++j) {
                     in.s[i][j] = numberToEnglish(3 * i + j + 1);
+                    expectedOut.s[j][i] = in.s[i][j];
                 }
             }
 
@@ -628,17 +444,16 @@ public final class HidlTestJava {
 
             // [[1 2 3] [4 5 6] [7 8 9] [10 11 12] [13 14 15]]^T
             // = [[1 4 7 10 13] [2 5 8 11 14] [3 6 9 12 15]]
-            Expect(toString(out),
-                   "[['one', 'four', 'seven', 'ten', 'thirteen'], "
-                   +"['two', 'five', 'eight', 'eleven', 'fourteen'], "
-                   +"['three', 'six', 'nine', 'twelve', 'fifteen']]");
+            ExpectTrue(out.equals(expectedOut));
         }
 
         {
             String[][] in = new String[5][3];
+            String[][] expectedOut = new String[3][5];
             for (int i = 0; i < 5; ++i) {
                 for (int j = 0; j < 3; ++j) {
                     in[i][j] = numberToEnglish(3 * i + j + 1);
+                    expectedOut[j][i] = in[i][j];
                 }
             }
 
@@ -646,13 +461,10 @@ public final class HidlTestJava {
 
             // [[1 2 3] [4 5 6] [7 8 9] [10 11 12] [13 14 15]]^T
             // = [[1 4 7 10 13] [2 5 8 11 14] [3 6 9 12 15]]
-            Expect(toString(out),
-                   "[['one', 'four', 'seven', 'ten', 'thirteen'], "
-                   +"['two', 'five', 'eight', 'eleven', 'fourteen'], "
-                   +"['three', 'six', 'nine', 'twelve', 'fifteen']]");
+            ExpectTrue(java.util.Arrays.deepEquals(out, expectedOut));
         }
 
-        Expect(toString(proxy.someBoolMethod(true)), "false");
+        ExpectTrue(proxy.someBoolMethod(true) == false);
 
         {
             boolean[] someBoolArray = new boolean[3];
@@ -660,47 +472,63 @@ public final class HidlTestJava {
             someBoolArray[1] = false;
             someBoolArray[2] = true;
 
-            Expect(toString(proxy.someBoolArrayMethod(someBoolArray)),
-                   "[false, true, false, true]");
+            boolean[] resultArray = proxy.someBoolArrayMethod(someBoolArray);
+            ExpectTrue(resultArray[0] == false);
+            ExpectTrue(resultArray[1] == true);
+            ExpectTrue(resultArray[2] == false);
 
             ArrayList<Boolean> someBoolVec = new ArrayList<Boolean>();
             someBoolVec.add(true);
             someBoolVec.add(false);
             someBoolVec.add(true);
 
-            Expect(booleanVecToString(proxy.someBoolVectorMethod(someBoolVec)),
-                   "[false, true, false]");
+            ArrayList<Boolean> resultVec = proxy.someBoolVectorMethod(someBoolVec);
+            ExpectTrue(resultVec.get(0) == false);
+            ExpectTrue(resultVec.get(1) == true);
+            ExpectTrue(resultVec.get(2) == false);
         }
 
         proxy.doThis(1.0f);
 
-        Expect(toString(proxy.doThatAndReturnSomething(1)), "666");
-        Expect(toString(proxy.doQuiteABit(1, 2L, 3.0f, 4.0)), "666.5");
+        ExpectTrue(proxy.doThatAndReturnSomething(1) == 666);
+        ExpectTrue(proxy.doQuiteABit(1, 2L, 3.0f, 4.0) == 666.5);
 
         {
             int[] paramArray = new int[15];
+            int[] expectedOutArray = new int[32];
             ArrayList<Integer> paramVec = new ArrayList<Integer>();
+            ArrayList<Integer> expectedOutVec = new ArrayList<Integer>();
+
             for (int i = 0; i < paramArray.length; ++i) {
                 paramArray[i] = i;
                 paramVec.add(i);
+
+                expectedOutArray[i] = 2 * i;
+                expectedOutArray[15 + i] = i;
+
+                expectedOutVec.add(2 * i);
             }
 
-            Expect(toString(proxy.doSomethingElse(paramArray)),
-                   "[0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, " +
-                   "0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 1, 2]");
+            expectedOutArray[30] = 1;
+            expectedOutArray[31] = 2;
 
-            Expect(integerVecToString(proxy.mapThisVector(paramVec)),
-                   "[0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28]");
+
+            int[] outArray = proxy.doSomethingElse(paramArray);
+            ExpectTrue(java.util.Objects.deepEquals(outArray, expectedOutArray));
+
+            ArrayList<Integer> outVec = proxy.mapThisVector(paramVec);
+            java.util.Objects.equals(outVec, expectedOutVec);
+
         }
 
-        Expect(toString(proxy.doStuffAndReturnAString()), "'Hello, world!'");
+        Expect(proxy.doStuffAndReturnAString(), "Hello, world!");
 
         BazCallback cb = new BazCallback();
         ExpectTrue(!cb.wasCalled());
         proxy.callMe(cb);
         ExpectTrue(cb.wasCalled());
 
-        Expect(toString(proxy.useAnEnum(IBaz.SomeEnum.goober)), "-64");
+        ExpectTrue(proxy.useAnEnum(IBaz.SomeEnum.goober) == -64);
 
         {
             String[] stringArray = new String[3];
@@ -708,16 +536,23 @@ public final class HidlTestJava {
             stringArray[1] = "two";
             stringArray[2] = "three";
 
-            Expect(toString(proxy.haveSomeStrings(stringArray)),
-                   "['Hello', 'World']");
+            String[] expectedOutArray = new String[2];
+            expectedOutArray[0] = "Hello";
+            expectedOutArray[1] = "World";
+
+            String[] outArray = proxy.haveSomeStrings(stringArray);
+            ExpectTrue(java.util.Arrays.deepEquals(outArray, expectedOutArray));
 
             ArrayList<String> stringVec = new ArrayList<String>();
             stringVec.add("one");
             stringVec.add("two");
             stringVec.add("three");
 
-            Expect(stringVecToString(proxy.haveAStringVec(stringVec)),
-                   "['Hello', 'World']");
+            ArrayList<String> expectedOutVec = new ArrayList<String>();
+            expectedOutVec.add("Hello");
+            expectedOutVec.add("World");
+
+            ExpectTrue(expectedOutVec.equals(proxy.haveAStringVec(stringVec)));
         }
 
         proxy.returnABunchOfStrings(
@@ -750,6 +585,147 @@ public final class HidlTestJava {
             ExpectTrue(!t1.equals(t2));
         }
 
+        ArrayList<NestedStruct> structs = proxy.getNestedStructs();
+        ExpectTrue(structs.size() == 5);
+        ExpectTrue(structs.get(1).matrices.size() == 6);
+
+        {
+            IBaz.Everything e = new IBaz.Everything();
+            Expect(e.toString(),
+                "{.number = 0, .anotherNumber = 0, .s = , " +
+                ".vs = [], .multidimArray = [[null, null], [null, null]], " +
+                ".sArray = [null, null, null], .anotherStruct = {.first = , .last = }, .bf = }");
+            e.s = "string!";
+            e.number = 127;
+            e.anotherNumber = 100;
+            e.vs.addAll(Arrays.asList("One", "Two", "Three"));
+            for (int i = 0; i < e.multidimArray.length; i++)
+                for (int j = 0; j < e.multidimArray[i].length; j++)
+                    e.multidimArray[i][j] = Integer.toString(i) + Integer.toString(j);
+            e.bf = IBaz.BitField.VALL;
+            e.anotherStruct.first = "James";
+            e.anotherStruct.last = "Bond";
+            Expect(e.toString(),
+                "{.number = 127, .anotherNumber = 100, .s = string!, " +
+                ".vs = [One, Two, Three], .multidimArray = [[00, 01], [10, 11]], " +
+                ".sArray = [null, null, null], .anotherStruct = {.first = James, .last = Bond}, " +
+                ".bf = V0 | V1 | V2 | V3 | VALL}");
+            Expect(IBaz.BitField.toString(IBaz.BitField.VALL), "VALL");
+            Expect(IBaz.BitField.toString((byte)(IBaz.BitField.V0 | IBaz.BitField.V2)), "0x5");
+            Expect(IBaz.BitField.dumpBitfield(IBaz.BitField.VALL), "V0 | V1 | V2 | V3 | VALL");
+            Expect(IBaz.BitField.dumpBitfield((byte)(IBaz.BitField.V1 | IBaz.BitField.V3 | 0xF0)),
+                "V1 | V3 | 0xf0");
+
+            Expect(proxy.toString(), IBaz.kInterfaceName + "@Proxy");
+        }
+
+        {
+            // Ensure that native parcel is cleared even if the corresponding
+            // Java object isn't GC'd.
+            ArrayList<Integer> data4K = new ArrayList<>(1024);
+            for (int i = 0; i < 1024; i++) {
+                data4K.add(i);
+            }
+
+            for (int i = 0; i < 1024; i++) {
+                // If they are not properly cleaned up, these calls will put 4MB of data in
+                // kernel binder buffer, and will fail.
+                try {
+                    proxy.mapThisVector(data4K);
+                } catch (RemoteException ex) {
+                    throw new RuntimeException("Failed at call #" + Integer.toString(i), ex);
+                }
+            }
+        }
+
+        {
+            // TestArrays
+            IBase.LotsOfPrimitiveArrays in = new IBase.LotsOfPrimitiveArrays();
+
+            for (int i = 0; i < 128; ++i) {
+                in.byte1[i] = (byte)i;
+                in.boolean1[i] = (i & 4) != 0;
+                in.double1[i] = i;
+            }
+
+            int m = 0;
+            for (int i = 0; i < 8; ++i) {
+                for (int j = 0; j < 128; ++j, ++m) {
+                    in.byte2[i][j] = (byte)m;
+                    in.boolean2[i][j] = (m & 4) != 0;
+                    in.double2[i][j] = m;
+                }
+            }
+
+            m = 0;
+            for (int i = 0; i < 8; ++i) {
+                for (int j = 0; j < 16; ++j) {
+                    for (int k = 0; k < 128; ++k, ++m) {
+                        in.byte3[i][j][k] = (byte)m;
+                        in.boolean3[i][j][k] = (m & 4) != 0;
+                        in.double3[i][j][k] = m;
+                    }
+                }
+            }
+
+            IBase.LotsOfPrimitiveArrays out = proxy.testArrays(in);
+            ExpectTrue(in.equals(out));
+        }
+
+        {
+            // testByteVecs
+
+            ArrayList<byte[]> in = new ArrayList<byte[]>();
+
+            int k = 0;
+            for (int i = 0; i < in.size(); ++i) {
+                byte[] elem = new byte[128];
+                for (int j = 0; j < 128; ++j, ++k) {
+                    elem[j] = (byte)k;
+                }
+                in.add(elem);
+            }
+
+            ArrayList<byte[]> out = proxy.testByteVecs(in);
+            ExpectTrue(in.equals(out));
+        }
+
+        {
+            // testBooleanVecs
+
+            ArrayList<boolean[]> in = new ArrayList<boolean[]>();
+
+            int k = 0;
+            for (int i = 0; i < in.size(); ++i) {
+                boolean[] elem = new boolean[128];
+                for (int j = 0; j < 128; ++j, ++k) {
+                    elem[j] = (k & 4) != 0;
+                }
+                in.add(elem);
+            }
+
+            ArrayList<boolean[]> out = proxy.testBooleanVecs(in);
+            ExpectTrue(in.equals(out));
+        }
+
+        {
+            // testDoubleVecs
+
+            ArrayList<double[]> in = new ArrayList<double[]>();
+
+            int k = 0;
+            for (int i = 0; i < in.size(); ++i) {
+                double[] elem = new double[128];
+                for (int j = 0; j < 128; ++j, ++k) {
+                    elem[j] = k;
+                }
+                in.add(elem);
+            }
+
+            ArrayList<double[]> out = proxy.testDoubleVecs(in);
+            ExpectTrue(in.equals(out));
+        }
+
         // --- DEATH RECIPIENT TESTING ---
         // This must always be done last, since it will kill the native server process
         HidlDeathRecipient recipient1 = new HidlDeathRecipient();
@@ -779,12 +755,12 @@ public final class HidlTestJava {
         }
 
         public IBase.Foo someOtherBaseMethod(IBase.Foo foo) {
-            Log.d(TAG, "Baz someOtherBaseMethod " + HidlTestJava.toString(foo));
+            Log.d(TAG, "Baz someOtherBaseMethod " + foo.toString());
             return foo;
         }
 
         public IBase.Foo[] someMethodWithFooArrays(IBase.Foo[] fooInput) {
-            Log.d(TAG, "Baz someMethodWithFooArrays " + HidlTestJava.toString(fooInput));
+            Log.d(TAG, "Baz someMethodWithFooArrays " + fooInput.toString());
 
             IBase.Foo[] fooOutput = new IBase.Foo[2];
             fooOutput[0] = fooInput[1];
@@ -795,7 +771,7 @@ public final class HidlTestJava {
 
         public ArrayList<IBase.Foo> someMethodWithFooVectors(
                 ArrayList<IBase.Foo> fooInput) {
-            Log.d(TAG, "Baz someMethodWithFooVectors " + HidlTestJava.fooVecToString(fooInput));
+            Log.d(TAG, "Baz someMethodWithFooVectors " + fooInput.toString());
 
             ArrayList<IBase.Foo> fooOutput = new ArrayList<IBase.Foo>();
             fooOutput.add(fooInput.get(1));
@@ -806,7 +782,7 @@ public final class HidlTestJava {
 
         public IBase.VectorOfArray someMethodWithVectorOfArray(
                 IBase.VectorOfArray in) {
-            Log.d(TAG, "Baz someMethodWithVectorOfArray " + HidlTestJava.toString(in));
+            Log.d(TAG, "Baz someMethodWithVectorOfArray " + in.toString());
 
             IBase.VectorOfArray out = new IBase.VectorOfArray();
             int n = in.addresses.size();
@@ -831,7 +807,7 @@ public final class HidlTestJava {
         }
 
         public IBase.StringMatrix3x5 transpose(IBase.StringMatrix5x3 in) {
-            Log.d(TAG, "Baz transpose " + HidlTestJava.toString(in));
+            Log.d(TAG, "Baz transpose " + in.toString());
 
             IBase.StringMatrix3x5 out = new IBase.StringMatrix3x5();
             for (int i = 0; i < 3; ++i) {
@@ -844,7 +820,7 @@ public final class HidlTestJava {
         }
 
         public String[][] transpose2(String[][] in) {
-            Log.d(TAG, "Baz transpose2 " + HidlTestJava.toString(in));
+            Log.d(TAG, "Baz transpose2 " + in.toString());
 
             String[][] out = new String[3][5];
             for (int i = 0; i < 3; ++i) {
@@ -864,7 +840,7 @@ public final class HidlTestJava {
 
         public boolean[] someBoolArrayMethod(boolean[] x) {
             Log.d(TAG, "Baz someBoolArrayMethod("
-                    + HidlTestJava.toString(x) + ")");
+                    + x.toString() + ")");
 
             boolean[] out = new boolean[4];
             out[0] = !x[0];
@@ -876,7 +852,7 @@ public final class HidlTestJava {
         }
 
         public ArrayList<Boolean> someBoolVectorMethod(ArrayList<Boolean> x) {
-            Log.d(TAG, "Baz someBoolVectorMethod(" + HidlTestJava.booleanVecToString(x) + ")");
+            Log.d(TAG, "Baz someBoolVectorMethod(" + x.toString() + ")");
 
             ArrayList<Boolean> out = new ArrayList<Boolean>();
             for (int i = 0; i < x.size(); ++i) {
@@ -901,7 +877,7 @@ public final class HidlTestJava {
         }
 
         public int[] doSomethingElse(int[] param) {
-            Log.d(TAG, "Baz doSomethingElse " + HidlTestJava.toString(param));
+            Log.d(TAG, "Baz doSomethingElse " + param.toString());
 
             int[] something = new int[32];
             for (int i = 0; i < 15; ++i) {
@@ -920,7 +896,7 @@ public final class HidlTestJava {
         }
 
         public ArrayList<Integer> mapThisVector(ArrayList<Integer> param) {
-            Log.d(TAG, "mapThisVector " + HidlTestJava.integerVecToString(param));
+            Log.d(TAG, "mapThisVector " + param.toString());
 
             ArrayList<Integer> out = new ArrayList<Integer>();
 
@@ -937,12 +913,33 @@ public final class HidlTestJava {
                     (byte)(second.value & bf), (byte)((bf | bf) & third));
         }
 
+        public LotsOfPrimitiveArrays testArrays(LotsOfPrimitiveArrays in) {
+            return in;
+        }
+
+        public ArrayList<byte[]> testByteVecs(ArrayList<byte[]> in) {
+            return in;
+        }
+
+        public ArrayList<boolean[]> testBooleanVecs(ArrayList<boolean[]> in) {
+            return in;
+        }
+
+        public ArrayList<double[]> testDoubleVecs(ArrayList<double[]> in) {
+            return in;
+        }
+
         public byte returnABitField() {
             return 0;
         }
 
         public int size(int size) {
             return size;
+        }
+
+        @Override
+        public ArrayList<NestedStruct> getNestedStructs() throws RemoteException {
+            return new ArrayList<>();
         }
 
         class BazCallback extends IBazCallback.Stub {
@@ -1012,12 +1009,11 @@ public final class HidlTestJava {
     }
 
     private void server() throws RemoteException {
+        HwBinder.configureRpcThreadpool(1, true);
+
         Baz baz = new Baz();
         baz.registerAsService("baz");
 
-        try {
-            Thread.sleep(20000);
-        } catch (InterruptedException e) {
-        }
+        HwBinder.joinRpcThreadpool();
     }
 }

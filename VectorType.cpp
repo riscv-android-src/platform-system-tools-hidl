@@ -18,20 +18,20 @@
 
 #include "ArrayType.h"
 #include "CompoundType.h"
+#include "HidlTypeAssertion.h"
 
 #include <hidl-util/Formatter.h>
 #include <android-base/logging.h>
 
 namespace android {
 
-VectorType::VectorType() {
+VectorType::VectorType(Scope* parent) : TemplatedType(parent) {}
+
+std::string VectorType::templatedTypeName() const {
+    return "vector";
 }
 
-std::string VectorType::typeName() const {
-    return "vector" + (mElementType == nullptr ? "" : (" of " + mElementType->typeName()));
-}
-
-bool VectorType::isCompatibleElementType(Type *elementType) const {
+bool VectorType::isCompatibleElementType(const Type* elementType) const {
     if (elementType->isScalar()) {
         return true;
     }
@@ -44,8 +44,8 @@ bool VectorType::isCompatibleElementType(Type *elementType) const {
     if (elementType->isBitField()) {
         return true;
     }
-    if (elementType->isCompoundType()
-            && static_cast<CompoundType *>(elementType)->style() == CompoundType::STYLE_STRUCT) {
+    if (elementType->isCompoundType() &&
+        static_cast<const CompoundType*>(elementType)->style() == CompoundType::STYLE_STRUCT) {
         return true;
     }
     if (elementType->isInterface()) {
@@ -54,19 +54,18 @@ bool VectorType::isCompatibleElementType(Type *elementType) const {
     if (elementType->isHandle()) {
         return true;
     }
+    if (elementType->isMemory()) {
+        return true;
+    }
     if (elementType->isTemplatedType()) {
-        Type *inner = static_cast<TemplatedType *>(elementType)->getElementType();
+        const Type* inner = static_cast<const TemplatedType*>(elementType)->getElementType();
         return this->isCompatibleElementType(inner) && !inner->isInterface();
     }
     if (elementType->isArray()) {
-        Type *inner = static_cast<ArrayType *>(elementType)->getElementType();
+        const Type* inner = static_cast<const ArrayType*>(elementType)->getElementType();
         return this->isCompatibleElementType(inner) && !inner->isInterface();
     }
     return false;
-}
-
-void VectorType::addNamedTypesToSet(std::set<const FQName> &set) const {
-    mElementType->addNamedTypesToSet(set);
 }
 
 bool VectorType::isVector() const {
@@ -77,8 +76,12 @@ bool VectorType::isVectorOfBinders() const {
     return mElementType->isBinder();
 }
 
-bool VectorType::canCheckEquality() const {
-    return mElementType->canCheckEquality();
+bool VectorType::deepCanCheckEquality(std::unordered_set<const Type*>* visited) const {
+    return mElementType->canCheckEquality(visited);
+}
+
+std::vector<const Reference<Type>*> VectorType::getStrongReferences() const {
+    return {};
 }
 
 std::string VectorType::getCppType(StorageMode mode,
@@ -125,6 +128,10 @@ std::string VectorType::getVtsType() const {
     return "TYPE_VECTOR";
 }
 
+std::string VectorType::getVtsValueName() const {
+    return "vector_value";
+}
+
 void VectorType::emitReaderWriter(
         Formatter &out,
         const std::string &name,
@@ -151,7 +158,10 @@ void VectorType::emitReaderWriter(
     if (isReader) {
         out << "_hidl_err = "
             << parcelObjDeref
-            << "readBuffer(&"
+            << "readBuffer("
+            << "sizeof(*"
+            << name
+            << "), &"
             << parentName
             << ", "
             << " reinterpret_cast<const void **>("
@@ -480,6 +490,8 @@ void VectorType::emitJavaReaderWriter(
     }
 
     if (mElementType->isArray()) {
+        size_t align, size;
+        getAlignmentAndSize(&align, &size);
         if (isReader) {
             out << " new "
                 << getJavaType(false /* forInitializer */)
@@ -493,10 +505,10 @@ void VectorType::emitJavaReaderWriter(
 
         if (isReader) {
             out << parcelObj
-                << ".readBuffer();\n";
+                << ".readBuffer("
+                << size
+                << " /* size */);\n";
         } else {
-            size_t align, size;
-            getAlignmentAndSize(&align, &size);
 
             out << "new android.os.HwBlob("
                 << size
@@ -555,7 +567,7 @@ void VectorType::emitJavaFieldReaderWriter(
     VectorType::EmitJavaFieldReaderWriterForElementType(
             out,
             depth,
-            mElementType,
+            mElementType.get(),
             parcelName,
             blobName,
             fieldName,
@@ -563,7 +575,6 @@ void VectorType::emitJavaFieldReaderWriter(
             isReader);
 }
 
-// static
 void VectorType::EmitJavaFieldReaderWriterForElementType(
         Formatter &out,
         size_t depth,
@@ -573,9 +584,18 @@ void VectorType::EmitJavaFieldReaderWriterForElementType(
         const std::string &fieldName,
         const std::string &offset,
         bool isReader) {
+    size_t elementAlign, elementSize;
+    elementType->getAlignmentAndSize(&elementAlign, &elementSize);
+
     if (isReader) {
         out << "{\n";
         out.indent();
+
+        out << "int _hidl_vec_size = "
+            << blobName
+            << ".getInt32("
+            << offset
+            << " + 8 /* offsetof(hidl_vec<T>, mSize) */);\n";
 
         out << "android.os.HwBlob childBlob = "
             << parcelName
@@ -584,21 +604,18 @@ void VectorType::EmitJavaFieldReaderWriterForElementType(
         out.indent();
         out.indent();
 
-        out << blobName
+        out << "_hidl_vec_size * "
+            << elementSize << ","
+            << blobName
             << ".handle(),\n"
             << offset
-            << " + 0 /* offsetof(hidl_vec<T>, mBuffer) */);\n\n";
+            << " + 0 /* offsetof(hidl_vec<T>, mBuffer) */,"
+            << "true /* nullable */);\n\n";
 
         out.unindent();
         out.unindent();
 
         out << fieldName << ".clear();\n";
-        out << "int _hidl_vec_size = "
-            << blobName
-            << ".getInt32("
-            << offset
-            << " + 8 /* offsetof(hidl_vec<T>, mSize) */);\n";
-
         std::string iteratorName = "_hidl_index_" + std::to_string(depth);
 
         out << "for (int "
@@ -613,9 +630,6 @@ void VectorType::EmitJavaFieldReaderWriterForElementType(
         out.indent();
 
         elementType->emitJavaFieldInitializer(out, "_hidl_vec_element");
-
-        size_t elementAlign, elementSize;
-        elementType->getAlignmentAndSize(&elementAlign, &elementSize);
 
         elementType->emitJavaFieldReaderWriter(
                 out,
@@ -655,9 +669,6 @@ void VectorType::EmitJavaFieldReaderWriterForElementType(
         << ".putBool("
         << offset
         << " + 12 /* offsetof(hidl_vec<T>, mOwnsBuffer) */, false);\n";
-
-    size_t elementAlign, elementSize;
-    elementType->getAlignmentAndSize(&elementAlign, &elementSize);
 
     // XXX make HwBlob constructor take a long instead of an int?
     out << "android.os.HwBlob childBlob = new android.os.HwBlob((int)(_hidl_vec_size * "
@@ -703,46 +714,24 @@ bool VectorType::needsEmbeddedReadWrite() const {
     return true;
 }
 
-bool VectorType::needsResolveReferences() const {
-    return mElementType->needsResolveReferences();
+bool VectorType::deepNeedsResolveReferences(std::unordered_set<const Type*>* visited) const {
+    if (mElementType->needsResolveReferences(visited)) {
+        return true;
+    }
+    return TemplatedType::deepNeedsResolveReferences(visited);
 }
 
 bool VectorType::resultNeedsDeref() const {
     return !isVectorOfBinders();
 }
 
-status_t VectorType::emitVtsTypeDeclarations(Formatter &out) const {
-    out << "type: " << getVtsType() << "\n";
-    out << "vector_value: {\n";
-    out.indent();
-    status_t err = mElementType->emitVtsTypeDeclarations(out);
-    if (err != OK) {
-        return err;
-    }
-    out.unindent();
-    out << "}\n";
-    return OK;
-}
-
-status_t VectorType::emitVtsAttributeType(Formatter &out) const {
-    out << "type: TYPE_VECTOR\n" << "vector_value: {\n";
-    out.indent();
-    status_t status = mElementType->emitVtsAttributeType(out);
-    if (status != OK) {
-        return status;
-    }
-    out.unindent();
-    out << "}\n";
-    return OK;
-}
-
-bool VectorType::isJavaCompatible() const {
-    if (!mElementType->isJavaCompatible()) {
+bool VectorType::deepIsJavaCompatible(std::unordered_set<const Type*>* visited) const {
+    if (!mElementType->isJavaCompatible(visited)) {
         return false;
     }
 
     if (mElementType->isArray()) {
-        return static_cast<ArrayType *>(mElementType)->countDimensions() == 1;
+        return static_cast<const ArrayType*>(mElementType.get())->countDimensions() == 1;
     }
 
     if (mElementType->isVector()) {
@@ -753,12 +742,26 @@ bool VectorType::isJavaCompatible() const {
         return false;
     }
 
-    return true;
+    return TemplatedType::deepIsJavaCompatible(visited);
+}
+
+bool VectorType::deepContainsPointer(std::unordered_set<const Type*>* visited) const {
+    if (mElementType->containsPointer(visited)) {
+        return true;
+    }
+    return TemplatedType::deepContainsPointer(visited);
+}
+
+// All hidl_vec<T> have the same size.
+static HidlTypeAssertion assertion("hidl_vec<char>", 16 /* size */);
+
+void VectorType::getAlignmentAndSizeStatic(size_t *align, size_t *size) {
+    *align = 8;  // hidl_vec<T>
+    *size = assertion.size();
 }
 
 void VectorType::getAlignmentAndSize(size_t *align, size_t *size) const {
-    *align = 8;  // hidl_vec<T>
-    *size = 16;
+    VectorType::getAlignmentAndSizeStatic(align, size);
 }
 
 }  // namespace android

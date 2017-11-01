@@ -16,16 +16,14 @@
 
 #include "MemoryType.h"
 
+#include "HidlTypeAssertion.h"
+
 #include <hidl-util/Formatter.h>
 #include <android-base/logging.h>
 
 namespace android {
 
-MemoryType::MemoryType() {}
-
-void MemoryType::addNamedTypesToSet(std::set<const FQName> &) const {
-    // do nothing
-}
+MemoryType::MemoryType(Scope* parent) : Type(parent) {}
 
 std::string MemoryType::getCppType(StorageMode mode,
                                    bool specifyNamespaces) const {
@@ -43,6 +41,10 @@ std::string MemoryType::getCppType(StorageMode mode,
         case StorageMode_Result:
             return "const " + base + "*";
     }
+}
+
+std::string MemoryType::typeName() const {
+    return "memory";
 }
 
 std::string MemoryType::getVtsType() const {
@@ -65,7 +67,10 @@ void MemoryType::emitReaderWriter(
     if (isReader) {
         out << "_hidl_err = "
             << parcelObjDeref
-            << "readBuffer(&"
+            << "readBuffer("
+            << "sizeof(*"
+            << name
+            << "), &"
             << parentName
             << ", "
             << " reinterpret_cast<const void **>("
@@ -136,12 +141,18 @@ bool MemoryType::resultNeedsDeref() const {
     return true;
 }
 
-bool MemoryType::isJavaCompatible() const {
+bool MemoryType::isMemory() const {
+    return true;
+}
+
+bool MemoryType::deepIsJavaCompatible(std::unordered_set<const Type*>* /* visited */) const {
     return false;
 }
 
+static HidlTypeAssertion assertion("hidl_memory", 40 /* size */);
 void MemoryType::getAlignmentAndSize(size_t *align, size_t *size) const {
-    *align = *size = 8;
+    *align = 8;  // hidl_memory
+    *size = assertion.size();
 }
 
 status_t MemoryType::emitVtsTypeDeclarations(Formatter &out) const {

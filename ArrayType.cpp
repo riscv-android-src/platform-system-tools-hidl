@@ -16,26 +16,17 @@
 
 #include "ArrayType.h"
 
-#include <hidl-util/Formatter.h>
 #include <android-base/logging.h>
+#include <hidl-util/Formatter.h>
+#include <iostream>
 
 #include "ConstantExpression.h"
 
 namespace android {
 
-ArrayType::ArrayType(ArrayType *srcArray, ConstantExpression *size)
-    : mElementType(srcArray->mElementType),
-      mSizes(srcArray->mSizes) {
-    prependDimension(size);
-}
-
-ArrayType::ArrayType(Type *elementType, ConstantExpression *size)
-    : mElementType(elementType) {
-    prependDimension(size);
-}
-
-void ArrayType::prependDimension(ConstantExpression *size) {
-    mSizes.insert(mSizes.begin(), size);
+ArrayType::ArrayType(const Reference<Type>& elementType, ConstantExpression* size, Scope* parent)
+    : Type(parent), mElementType(elementType), mSizes{size} {
+    CHECK(!elementType.isEmptyReference());
 }
 
 void ArrayType::appendDimension(ConstantExpression *size) {
@@ -46,20 +37,56 @@ size_t ArrayType::countDimensions() const {
     return mSizes.size();
 }
 
-void ArrayType::addNamedTypesToSet(std::set<const FQName> &set) const {
-    mElementType->addNamedTypesToSet(set);
-}
-
 bool ArrayType::isArray() const {
     return true;
 }
 
-bool ArrayType::canCheckEquality() const {
-    return mElementType->canCheckEquality();
+bool ArrayType::deepCanCheckEquality(std::unordered_set<const Type*>* visited) const {
+    return mElementType->canCheckEquality(visited);
 }
 
-Type *ArrayType::getElementType() const {
-    return mElementType;
+const Type* ArrayType::getElementType() const {
+    return mElementType.get();
+}
+
+std::string ArrayType::typeName() const {
+    if (dimension() == 1) {
+        return "array of " + mElementType->typeName();
+    }
+
+    return std::to_string(dimension()) + "d array of " + mElementType->typeName();
+}
+
+std::vector<const Reference<Type>*> ArrayType::getReferences() const {
+    return {&mElementType};
+}
+
+std::vector<const ConstantExpression*> ArrayType::getConstantExpressions() const {
+    std::vector<const ConstantExpression*> ret;
+    ret.insert(ret.end(), mSizes.begin(), mSizes.end());
+    return ret;
+}
+
+status_t ArrayType::resolveInheritance() {
+    // Resolve for typedefs
+    while (mElementType->isArray()) {
+        ArrayType* innerArray = static_cast<ArrayType*>(mElementType.get());
+        mSizes.insert(mSizes.end(), innerArray->mSizes.begin(), innerArray->mSizes.end());
+        mElementType = innerArray->mElementType;
+    }
+    return Type::resolveInheritance();
+}
+
+status_t ArrayType::validate() const {
+    CHECK(!mElementType->isArray());
+
+    if (mElementType->isBinder()) {
+        std::cerr << "ERROR: Arrays of interface types are not supported"
+                  << " at " << mElementType.location() << "\n";
+
+        return UNKNOWN_ERROR;
+    }
+    return Type::validate();
 }
 
 std::string ArrayType::getCppType(StorageMode mode,
@@ -94,6 +121,16 @@ std::string ArrayType::getCppType(StorageMode mode,
     }
 
     CHECK(!"Should not be here");
+}
+
+std::string ArrayType::getInternalDataCppType() const {
+    std::string result = mElementType->getCppStackType();
+    for (size_t i = 0; i < mSizes.size(); ++i) {
+        result += "[";
+        result += mSizes[i]->cppValue();
+        result += "]";
+    }
+    return result;
 }
 
 std::string ArrayType::getJavaType(bool forInitializer) const {
@@ -143,10 +180,18 @@ void ArrayType::emitReaderWriter(
     const std::string parcelObjDeref =
         parcelObj + (parcelObjIsPointer ? "->" : ".");
 
+    size_t numArrayElements = 1;
+    for (auto size : mSizes) {
+        numArrayElements *= size->castSizeT();
+    }
     if (isReader) {
         out << "_hidl_err = "
             << parcelObjDeref
-            << "readBuffer(&"
+            << "readBuffer("
+            << numArrayElements
+            << " * sizeof("
+            << baseType
+            << "), &"
             << parentName
             << ", "
             << " reinterpret_cast<const void **>("
@@ -155,10 +200,6 @@ void ArrayType::emitReaderWriter(
 
         handleError(out, mode);
     } else {
-        size_t numArrayElements = 1;
-        for (auto size : mSizes) {
-            numArrayElements *= size->castSizeT();
-        }
 
         out << "_hidl_err = "
             << parcelObjDeref
@@ -318,13 +359,26 @@ void ArrayType::emitResolveReferencesEmbedded(
     out << "}\n\n";
 }
 
+void ArrayType::emitJavaDump(
+        Formatter &out,
+        const std::string &streamName,
+        const std::string &name) const {
+    out << streamName << ".append(java.util.Arrays."
+        << (countDimensions() > 1 ? "deepToString" : "toString")
+        << "("
+        << name << "));\n";
+}
+
 
 bool ArrayType::needsEmbeddedReadWrite() const {
     return mElementType->needsEmbeddedReadWrite();
 }
 
-bool ArrayType::needsResolveReferences() const {
-    return mElementType->needsResolveReferences();
+bool ArrayType::deepNeedsResolveReferences(std::unordered_set<const Type*>* visited) const {
+    if (mElementType->needsResolveReferences(visited)) {
+        return true;
+    }
+    return Type::deepNeedsResolveReferences(visited);
 }
 
 bool ArrayType::resultNeedsDeref() const {
@@ -336,6 +390,9 @@ void ArrayType::emitJavaReaderWriter(
         const std::string &parcelObj,
         const std::string &argName,
         bool isReader) const {
+    size_t align, size;
+    getAlignmentAndSize(&align, &size);
+
     if (isReader) {
         out << "new "
             << getJavaType(true /* forInitializer */)
@@ -349,11 +406,10 @@ void ArrayType::emitJavaReaderWriter(
 
     if (isReader) {
         out << parcelObj
-            << ".readBuffer();\n";
+            << ".readBuffer("
+            << size
+            << " /* size */);\n";
     } else {
-        size_t align, size;
-        getAlignmentAndSize(&align, &size);
-
         out << "new android.os.HwBlob("
             << size
             << " /* size */);\n";
@@ -404,8 +460,16 @@ void ArrayType::emitJavaFieldReaderWriter(
     std::string offsetName = "_hidl_array_offset_" + std::to_string(depth);
     out << "long " << offsetName << " = " << offset << ";\n";
 
+    const bool isPrimitiveArray = mElementType->isScalar();
+
+    /* If the element type corresponds to a Java primitive type we can optimize
+       the innermost loop by copying a linear range of memory instead of doing
+       a per-element copy. As a result the outer nested loop does not include
+       the final dimension. */
+    const size_t loopDimensions = mSizes.size() - (isPrimitiveArray ? 1 : 0);
+
     std::string indexString;
-    for (size_t dim = 0; dim < mSizes.size(); ++dim) {
+    for (size_t dim = 0; dim < loopDimensions; ++dim) {
         std::string iteratorName =
             "_hidl_index_" + std::to_string(depth) + "_" + std::to_string(dim);
 
@@ -435,21 +499,57 @@ void ArrayType::emitJavaFieldReaderWriter(
             << "();\n";
     }
 
-    mElementType->emitJavaFieldReaderWriter(
-            out,
-            depth + 1,
-            parcelName,
-            blobName,
-            fieldName + indexString,
-            offsetName,
-            isReader);
+    if (!isPrimitiveArray) {
+        mElementType->emitJavaFieldReaderWriter(
+                out,
+                depth + 1,
+                parcelName,
+                blobName,
+                fieldName + indexString,
+                offsetName,
+                isReader);
 
-    size_t elementAlign, elementSize;
-    mElementType->getAlignmentAndSize(&elementAlign, &elementSize);
+        size_t elementAlign, elementSize;
+        mElementType->getAlignmentAndSize(&elementAlign, &elementSize);
 
-    out << offsetName << " += " << std::to_string(elementSize) << ";\n";
+        out << offsetName << " += " << std::to_string(elementSize) << ";\n";
+    } else {
+        if (isReader) {
+            out << blobName
+                << ".copyTo"
+                << mElementType->getJavaSuffix()
+                << "Array("
+                << offsetName
+                << ", "
+                << fieldName
+                << indexString
+                << ", "
+                << mSizes.back()->javaValue()
+                << " /* size */);\n";
+        } else {
+            out << blobName
+                << ".put"
+                << mElementType->getJavaSuffix()
+                << "Array("
+                << offsetName
+                << ", "
+                << fieldName
+                << indexString
+                << ");\n";
+        }
 
-    for (size_t dim = 0; dim < mSizes.size(); ++dim) {
+        size_t elementAlign, elementSize;
+        mElementType->getAlignmentAndSize(&elementAlign, &elementSize);
+
+        out << offsetName
+            << " += "
+            << mSizes.back()->javaValue()
+            << " * "
+            << elementSize
+            << ";\n";
+    }
+
+    for (size_t dim = 0; dim < loopDimensions; ++dim) {
         out.unindent();
         out << "}\n";
     }
@@ -460,9 +560,9 @@ void ArrayType::emitJavaFieldReaderWriter(
 
 status_t ArrayType::emitVtsTypeDeclarations(Formatter &out) const {
     out << "type: " << getVtsType() << "\n";
+    out << "vector_size: " << mSizes[0]->value() << "\n";
     out << "vector_value: {\n";
     out.indent();
-    out << "vector_size: " << mSizes[0]->value() << "\n";
     // Simple array case.
     if (mSizes.size() == 1) {
         status_t err = mElementType->emitVtsTypeDeclarations(out);
@@ -472,9 +572,9 @@ status_t ArrayType::emitVtsTypeDeclarations(Formatter &out) const {
     } else {  // Multi-dimension array case.
         for (size_t index = 1; index < mSizes.size(); index++) {
             out << "type: " << getVtsType() << "\n";
+            out << "vector_size: " << mSizes[index]->value() << "\n";
             out << "vector_value: {\n";
             out.indent();
-            out << "vector_size: " << mSizes[index]->value() << "\n";
             if (index == mSizes.size() - 1) {
                 status_t err = mElementType->emitVtsTypeDeclarations(out);
                 if (err != OK) {
@@ -490,8 +590,18 @@ status_t ArrayType::emitVtsTypeDeclarations(Formatter &out) const {
     return OK;
 }
 
-bool ArrayType::isJavaCompatible() const {
-    return mElementType->isJavaCompatible();
+bool ArrayType::deepIsJavaCompatible(std::unordered_set<const Type*>* visited) const {
+    if (!mElementType->isJavaCompatible(visited)) {
+        return false;
+    }
+    return Type::deepIsJavaCompatible(visited);
+}
+
+bool ArrayType::deepContainsPointer(std::unordered_set<const Type*>* visited) const {
+    if (mElementType->containsPointer(visited)) {
+        return true;
+    }
+    return Type::deepContainsPointer(visited);
 }
 
 void ArrayType::getAlignmentAndSize(size_t *align, size_t *size) const {
