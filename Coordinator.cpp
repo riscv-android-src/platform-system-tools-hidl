@@ -59,6 +59,10 @@ void Coordinator::setVerbose(bool verbose) {
     mVerbose = verbose;
 }
 
+bool Coordinator::isVerbose() const {
+    return mVerbose;
+}
+
 status_t Coordinator::addPackagePath(const std::string& root, const std::string& path, std::string* error) {
     FQName package = FQName(root, "0.0", "");
     for (const PackageRoot &packageRoot : mPackageRoots) {
@@ -576,7 +580,11 @@ status_t Coordinator::enforceMinorVersionUprevs(const FQName &currentPackage) co
 
         bool lastFQNameExists = lastAST != nullptr && lastAST->getInterface() != nullptr;
 
-        if (iface->superType()->fqName() != lastFQName && lastFQNameExists) {
+        if (!lastFQNameExists) {
+            continue;
+        }
+
+        if (iface->superType()->fqName() != lastFQName) {
             std::cerr << "ERROR: Cannot enforce minor version uprevs for "
                       << currentPackage.string() << ": " << iface->fqName().string() << " extends "
                       << iface->superType()->fqName().string()
@@ -586,6 +594,7 @@ status_t Coordinator::enforceMinorVersionUprevs(const FQName &currentPackage) co
         }
 
         // at least one interface must extend the previous version
+        // @2.0::IFoo does not work. It must be @2.1::IFoo for at least one interface.
         if (lastFQName.getPackageAndVersion() == prevPackage.getPackageAndVersion()) {
             extendedInterface = true;
         }
