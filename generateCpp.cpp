@@ -380,7 +380,7 @@ status_t AST::generateInterfaceHeader(const std::string &outputPath) const {
         out << "};\n\n";
     }
 
-    err = mRootScope.emitGlobalTypeDeclarations(out);
+    err = mRootScope.emitPackageTypeDeclarations(out);
 
     if (err != OK) {
         return err;
@@ -388,6 +388,8 @@ status_t AST::generateInterfaceHeader(const std::string &outputPath) const {
 
     out << "\n";
     enterLeaveNamespace(out, false /* enter */);
+
+    mRootScope.emitGlobalTypeDeclarations(out);
 
     out << "\n#endif  // " << guard << "\n";
 
@@ -433,7 +435,7 @@ status_t AST::generateHwBinderHeader(const std::string &outputPath) const {
 
     enterLeaveNamespace(out, true /* enter */);
 
-    status_t err = mRootScope.emitGlobalHwDeclarations(out);
+    status_t err = mRootScope.emitPackageHwDeclarations(out);
     if (err != OK) {
         return err;
     }
@@ -715,7 +717,7 @@ status_t AST::generateStubHeader(const std::string &outputPath) const {
     generateTemplatizationLink(out);
     generateCppTag(out, "android::hardware::details::bnhw_tag");
 
-    out << "::android::sp<" << iface->localName() << "> getImpl() { return _hidl_mImpl; };\n";
+    out << "::android::sp<" << iface->localName() << "> getImpl() { return _hidl_mImpl; }\n";
 
     status_t err = generateMethods(out, [&](const Method *method, const Interface *) {
         if (method->isHidlReserved() && method->overridesCppImpl(IMPL_PROXY)) {

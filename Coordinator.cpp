@@ -63,6 +63,13 @@ bool Coordinator::isVerbose() const {
     return mVerbose;
 }
 
+const std::string& Coordinator::getOwner() const {
+    return mOwner;
+}
+void Coordinator::setOwner(const std::string& owner) {
+    mOwner = owner;
+}
+
 status_t Coordinator::addPackagePath(const std::string& root, const std::string& path, std::string* error) {
     FQName package = FQName(root, "0.0", "");
     for (const PackageRoot &packageRoot : mPackageRoots) {
@@ -164,8 +171,8 @@ AST* Coordinator::parse(const FQName& fqName, std::set<AST*>* parsedASTs,
     if (fqName.name() != "types") {
         // Any interface file implicitly imports its package's types.hal.
         FQName typesName = fqName.getTypesForPackage();
-        // Do not enforce on imports.
-        typesAST = parse(typesName, parsedASTs, Enforce::NONE);
+        // Do not enforce on imports. Do not add imports' imports to this AST.
+        typesAST = parse(typesName, nullptr, Enforce::NONE);
 
         // fall through.
     }
