@@ -35,10 +35,11 @@
 
 namespace android {
 
-AST::AST(const Coordinator* coordinator, const std::string& path)
+AST::AST(const Coordinator* coordinator, const Hash* fileHash)
     : mCoordinator(coordinator),
-      mPath(path),
-      mRootScope("(root scope)", FQName(), Location::startOf(path), nullptr /* parent */) {}
+      mFileHash(fileHash),
+      mRootScope("(root scope)", FQName(), Location::startOf(fileHash->getPath()),
+                 nullptr /* parent */) {}
 
 Scope* AST::getRootScope() {
     return &mRootScope;
@@ -53,13 +54,17 @@ size_t AST::syntaxErrors() const {
     return mSyntaxErrors;
 }
 
-const std::string &AST::getFilename() const {
-    return mPath;
+const std::string& AST::getFilename() const {
+    return mFileHash->getPath();
+}
+const Hash* AST::getFileHash() const {
+    return mFileHash;
 }
 
 bool AST::setPackage(const char *package) {
-    mPackage.setTo(package);
-    CHECK(mPackage.isValid());
+    if (!mPackage.setTo(package)) {
+        return false;
+    }
 
     if (mPackage.package().empty()
             || mPackage.version().empty()
@@ -300,8 +305,11 @@ status_t AST::checkForwardReferenceRestrictions() const {
 }
 
 bool AST::addImport(const char *import) {
-    FQName fqName(import);
-    CHECK(fqName.isValid());
+    FQName fqName;
+    if (!FQName::parse(import, &fqName)) {
+        std::cerr << "ERROR: '" << import << "' is an invalid fully-qualified name." << std::endl;
+        return false;
+    }
 
     fqName.applyDefaults(mPackage.package(), mPackage.version());
 
@@ -335,15 +343,17 @@ bool AST::addImport(const char *import) {
 
     addToImportedNamesGranular(fqName);
 
-    AST *importAST;
-
     // cases like android.hardware.foo@1.0::IFoo.Internal
     //            android.hardware.foo@1.0::Abc.Internal
 
     // assume it is an interface, and try to import it.
     const FQName interfaceName = fqName.getTopLevelType();
     // Do not enforce restrictions on imports.
-    importAST = mCoordinator->parse(interfaceName, &mImportedASTs, Coordinator::Enforce::NONE);
+    AST* importAST;
+    status_t err = mCoordinator->parseOptional(interfaceName, &importAST, &mImportedASTs,
+                                               Coordinator::Enforce::NONE);
+    if (err != OK) return false;
+    // importAST nullptr == file doesn't exist
 
     if (importAST != nullptr) {
         // cases like android.hardware.foo@1.0::IFoo.Internal
@@ -438,7 +448,6 @@ EnumValue* AST::lookupEnumValue(const FQName& fqName, std::string* errorMsg, Sco
     FQName enumTypeName = fqName.typeName();
     std::string enumValueName = fqName.valueName();
 
-    CHECK(enumTypeName.isValid());
     CHECK(!enumValueName.empty());
 
     Type* type = lookupType(enumTypeName, scope);
@@ -465,8 +474,6 @@ EnumValue* AST::lookupEnumValue(const FQName& fqName, std::string* errorMsg, Sco
 }
 
 Type* AST::lookupType(const FQName& fqName, Scope* scope) {
-    CHECK(fqName.isValid());
-
     if (fqName.name().empty()) {
         // Given a package and version???
         return nullptr;
@@ -686,7 +693,7 @@ Type *AST::findDefinedType(const FQName &fqName, FQName *matchingName) const {
 }
 
 void AST::getImportedPackages(std::set<FQName> *importSet) const {
-    for (const auto &fqName : mImportedNames) {
+    for (const auto& fqName : mImportedNamesGranular) {
         FQName packageName = fqName.getPackageAndVersion();
 
         if (packageName == mPackage) {
@@ -700,6 +707,7 @@ void AST::getImportedPackages(std::set<FQName> *importSet) const {
 
 void AST::getImportedPackagesHierarchy(std::set<FQName> *importSet) const {
     getImportedPackages(importSet);
+
     std::set<FQName> newSet;
     for (const auto &ast : mImportedASTs) {
         if (importSet->find(ast->package()) != importSet->end()) {

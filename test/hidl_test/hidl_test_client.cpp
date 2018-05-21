@@ -63,6 +63,7 @@
 
 #include <hidl-test/FooHelper.h>
 #include <hidl-test/PointerHelper.h>
+#include <hidl-util/FQName.h>
 
 #include <hidl/ServiceManagement.h>
 #include <hidl/Status.h>
@@ -90,6 +91,7 @@ enum TestMode {
 
 static HidlEnvironment *gHidlEnvironment = nullptr;
 
+using ::android::FQName;
 using ::android::hardware::tests::foo::V1_0::Abc;
 using ::android::hardware::tests::foo::V1_0::IFoo;
 using ::android::hardware::tests::foo::V1_0::IFooCallback;
@@ -138,7 +140,7 @@ using ::android::ONEWAY_TOLERANCE_NS;
 using std::to_string;
 
 template <typename T>
-using hidl_enum_iterator = ::android::hardware::hidl_enum_iterator<T>;
+using hidl_enum_range = ::android::hardware::hidl_enum_range<T>;
 
 template <typename T>
 static inline ::testing::AssertionResult isOk(const ::android::hardware::Return<T> &ret) {
@@ -472,30 +474,30 @@ TEST_F(HidlTest, EnumIteratorTest) {
     using SkipsValues = ::android::hardware::tests::foo::V1_0::EnumIterators::SkipsValues;
     using MultipleValues = ::android::hardware::tests::foo::V1_0::EnumIterators::MultipleValues;
 
-    for (const auto value : hidl_enum_iterator<Empty>()) {
+    for (const auto value : hidl_enum_range<Empty>()) {
         (void)value;
         EXPECT_TRUE(false) << "Empty iterator should not iterate";
     }
 
-    auto it1 = hidl_enum_iterator<Grandchild>().begin();
+    auto it1 = hidl_enum_range<Grandchild>().begin();
     EXPECT_EQ(Grandchild::A, *it1++);
     EXPECT_EQ(Grandchild::B, *it1++);
-    EXPECT_EQ(hidl_enum_iterator<Grandchild>().end(), it1);
+    EXPECT_EQ(hidl_enum_range<Grandchild>().end(), it1);
 
-    auto it2 = hidl_enum_iterator<SkipsValues>().begin();
+    auto it2 = hidl_enum_range<SkipsValues>().begin();
     EXPECT_EQ(SkipsValues::A, *it2++);
     EXPECT_EQ(SkipsValues::B, *it2++);
     EXPECT_EQ(SkipsValues::C, *it2++);
     EXPECT_EQ(SkipsValues::D, *it2++);
     EXPECT_EQ(SkipsValues::E, *it2++);
-    EXPECT_EQ(hidl_enum_iterator<SkipsValues>().end(), it2);
+    EXPECT_EQ(hidl_enum_range<SkipsValues>().end(), it2);
 
-    auto it3 = hidl_enum_iterator<MultipleValues>().begin();
+    auto it3 = hidl_enum_range<MultipleValues>().begin();
     EXPECT_EQ(MultipleValues::A, *it3++);
     EXPECT_EQ(MultipleValues::B, *it3++);
     EXPECT_EQ(MultipleValues::C, *it3++);
     EXPECT_EQ(MultipleValues::D, *it3++);
-    EXPECT_EQ(hidl_enum_iterator<MultipleValues>().end(), it3);
+    EXPECT_EQ(hidl_enum_range<MultipleValues>().end(), it3);
 }
 
 TEST_F(HidlTest, EnumToStringTest) {
@@ -513,6 +515,15 @@ TEST_F(HidlTest, EnumToStringTest) {
               "V0 | V2 (0x5)"s);
     EXPECT_EQ(toString<IFoo::BitField>((uint8_t)0xF), "V0 | V1 | V2 | V3 | VALL (0xf)"s);
     EXPECT_EQ(toString<IFoo::BitField>((uint8_t)0xFF), "V0 | V1 | V2 | V3 | VALL | 0xf0 (0xff)"s);
+
+    // inheritance
+    using Parent = ::android::hardware::tests::foo::V1_0::EnumIterators::Parent;
+    using EmptyChild = ::android::hardware::tests::foo::V1_0::EnumIterators::EmptyChild;
+    using Grandchild = ::android::hardware::tests::foo::V1_0::EnumIterators::Grandchild;
+    EXPECT_EQ(toString(Parent::A), "A"s);
+    EXPECT_EQ(toString(EmptyChild::A), "A"s);
+    EXPECT_EQ(toString(Grandchild::A), "A"s);
+    EXPECT_EQ(toString(Grandchild::B), "B"s);
 }
 
 TEST_F(HidlTest, PingTest) {
@@ -738,6 +749,16 @@ TEST_F(HidlTest, ServiceAllNotificationTest) {
         "['" + descriptor + "/" + instanceOne + "', '" + descriptor + "/" + instanceTwo + "']");
 }
 
+TEST_F(HidlTest, DebugDumpTest) {
+    EXPECT_OK(manager->debugDump([](const auto& list) {
+        for (const auto& debugInfo : list) {
+            FQName name;
+            EXPECT_TRUE(FQName::parse(debugInfo.interfaceName, &name)) << debugInfo.interfaceName;
+            EXPECT_TRUE(debugInfo.instanceName.size() > 0);
+        }
+    }));
+}
+
 TEST_F(HidlTest, InterfacesEqualTest) {
     using android::hardware::interfacesEqual;
 
@@ -960,6 +981,23 @@ TEST_F(HidlTest, FooGetDescriptorTest) {
         EXPECT_EQ(desc, mode == BINDERIZED
                 ? IBar::descriptor // service is actually IBar in binderized mode
                 : IFoo::descriptor); // dlopened, so service is IFoo
+    }));
+}
+
+TEST_F(HidlTest, FooConvertToBoolIfSmallTest) {
+    hidl_vec<IFoo::Union> u = {
+        {.intValue = 7}, {.intValue = 0}, {.intValue = 1}, {.intValue = 8},
+    };
+    EXPECT_OK(foo->convertToBoolIfSmall(IFoo::Discriminator::INT, u, [&](const auto& res) {
+        ASSERT_EQ(4u, res.size());
+        EXPECT_EQ(IFoo::Discriminator::INT, res[0].discriminator);
+        EXPECT_EQ(u[0].intValue, res[0].value.intValue);
+        EXPECT_EQ(IFoo::Discriminator::BOOL, res[1].discriminator);
+        EXPECT_EQ(static_cast<bool>(u[1].intValue), res[1].value.boolValue);
+        EXPECT_EQ(IFoo::Discriminator::BOOL, res[2].discriminator);
+        EXPECT_EQ(static_cast<bool>(u[2].intValue), res[2].value.boolValue);
+        EXPECT_EQ(IFoo::Discriminator::INT, res[3].discriminator);
+        EXPECT_EQ(u[3].intValue, res[3].value.intValue);
     }));
 }
 
@@ -1762,7 +1800,6 @@ TEST_F(HidlTest, TrieStressTest) {
                 for (size_t i = 0; i != REQUEST_NUM; ++i) {
                     strings.push_back(stringGenerator.next());
                 }
-                std::random_shuffle(strings.begin(), strings.end());
 
                 std::vector<bool> trueResponse(strings.size());
                 std::transform(strings.begin(), strings.end(), trueResponse.begin(),

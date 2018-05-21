@@ -29,77 +29,43 @@
 #define RE_MAJOR        "[0-9]+"
 #define RE_MINOR        "[0-9]+"
 
-// android.hardware.foo@1.0::IFoo.Type
-static const std::regex kRE1("(" RE_PATH ")@(" RE_MAJOR ")[.](" RE_MINOR ")::(" RE_PATH ")");
-// @1.0::IFoo.Type
-static const std::regex kRE2("@(" RE_MAJOR ")[.](" RE_MINOR ")::(" RE_PATH ")");
-// android.hardware.foo@1.0 (for package declaration and whole package import)
-static const std::regex kRE3("(" RE_PATH ")@(" RE_MAJOR ")[.](" RE_MINOR ")");
-// IFoo.Type
-static const std::regex kRE4("(" RE_COMPONENT ")([.]" RE_COMPONENT ")+");
-// Type (a plain identifier)
-static const std::regex kRE5("(" RE_COMPONENT ")");
-
-// android.hardware.foo@1.0::IFoo.Type:MY_ENUM_VALUE
-static const std::regex kRE6("(" RE_PATH ")@(" RE_MAJOR ")[.](" RE_MINOR ")::(" RE_PATH "):(" RE_COMPONENT ")");
-// @1.0::IFoo.Type:MY_ENUM_VALUE
-static const std::regex kRE7("@(" RE_MAJOR ")[.](" RE_MINOR ")::(" RE_PATH "):(" RE_COMPONENT ")");
-// IFoo.Type:MY_ENUM_VALUE
-static const std::regex kRE8("(" RE_PATH "):(" RE_COMPONENT ")");
-
-// 1.0
-static const std::regex kREVer("(" RE_MAJOR ")[.](" RE_MINOR ")");
-
 namespace android {
 
-FQName::FQName()
-    : mValid(false),
-      mIsIdentifier(false) {
+FQName::FQName() : mIsIdentifier(false) {}
+
+bool FQName::parse(const std::string& s, FQName* into) {
+    return into->setTo(s);
 }
 
-FQName::FQName(const std::string &s)
-    : mValid(false),
-      mIsIdentifier(false) {
-    setTo(s);
+FQName::FQName(const std::string& package, const std::string& version, const std::string& name,
+               const std::string& valueName) {
+    size_t majorVer, minorVer;
+    CHECK(parseVersion(version, &majorVer, &minorVer));
+    CHECK(setTo(package, majorVer, minorVer, name, valueName)) << string();
 }
 
-FQName::FQName(
-        const std::string &package,
-        const std::string &version,
-        const std::string &name,
-        const std::string &valueName)
-    : mValid(true),
-      mIsIdentifier(false),
-      mPackage(package),
-      mName(name),
-      mValueName(valueName) {
-    setVersion(version);
+bool FQName::setTo(const std::string& package, size_t majorVer, size_t minorVer,
+                   const std::string& name, const std::string& valueName) {
+    mPackage = package;
+    mMajor = majorVer;
+    mMinor = minorVer;
+    mName = name;
+    mValueName = valueName;
 
-    // Check if this is actually a valid fqName
     FQName other;
-    other.setTo(this->string());
-    CHECK(other.mValid && (*this) == other);
+    if (!parse(string(), &other)) return false;
+    if ((*this) != other) return false;
+    mIsIdentifier = other.isIdentifier();
+    return true;
 }
 
 FQName::FQName(const FQName& other)
-    : mValid(other.mValid),
-      mIsIdentifier(other.mIsIdentifier),
+    : mIsIdentifier(other.mIsIdentifier),
       mPackage(other.mPackage),
       mMajor(other.mMajor),
       mMinor(other.mMinor),
       mName(other.mName),
-      mValueName(other.mValueName) {
-}
-
-FQName::FQName(const std::vector<std::string> &names)
-    : mValid(false),
-      mIsIdentifier(false) {
-    setTo(StringHelper::JoinStrings(names, "."));
-}
-
-bool FQName::isValid() const {
-    return mValid;
-}
+      mValueName(other.mValueName) {}
 
 bool FQName::isIdentifier() const {
     return mIsIdentifier;
@@ -114,30 +80,51 @@ bool FQName::isValidValueName() const {
         || (!mName.empty() && !mValueName.empty());
 }
 
-bool FQName::setTo(const std::string &s) {
-    clearVersion();
-    mPackage.clear();
-    mName.clear();
+bool FQName::isInterfaceName() const {
+    return !mName.empty() && mName[0] == 'I' && mName.find('.') == std::string::npos;
+}
 
-    mValid = true;
+bool FQName::setTo(const std::string &s) {
+    // android.hardware.foo@1.0::IFoo.Type
+    static const std::regex kRE1("(" RE_PATH ")@(" RE_MAJOR ")[.](" RE_MINOR ")::(" RE_PATH ")");
+    // @1.0::IFoo.Type
+    static const std::regex kRE2("@(" RE_MAJOR ")[.](" RE_MINOR ")::(" RE_PATH ")");
+    // android.hardware.foo@1.0 (for package declaration and whole package import)
+    static const std::regex kRE3("(" RE_PATH ")@(" RE_MAJOR ")[.](" RE_MINOR ")");
+    // IFoo.Type
+    static const std::regex kRE4("(" RE_COMPONENT ")([.]" RE_COMPONENT ")+");
+    // Type (a plain identifier)
+    static const std::regex kRE5("(" RE_COMPONENT ")");
+
+    // android.hardware.foo@1.0::IFoo.Type:MY_ENUM_VALUE
+    static const std::regex kRE6("(" RE_PATH ")@(" RE_MAJOR ")[.](" RE_MINOR ")::(" RE_PATH
+                                 "):(" RE_COMPONENT ")");
+    // @1.0::IFoo.Type:MY_ENUM_VALUE
+    static const std::regex kRE7("@(" RE_MAJOR ")[.](" RE_MINOR ")::(" RE_PATH "):(" RE_COMPONENT
+                                 ")");
+    // IFoo.Type:MY_ENUM_VALUE
+    static const std::regex kRE8("(" RE_PATH "):(" RE_COMPONENT ")");
+
+    bool invalid = false;
+    clear();
 
     std::smatch match;
     if (std::regex_match(s, match, kRE1)) {
         CHECK_EQ(match.size(), 5u);
 
         mPackage = match.str(1);
-        parseVersion(match.str(2), match.str(3));
+        invalid |= !parseVersion(match.str(2), match.str(3));
         mName = match.str(4);
     } else if (std::regex_match(s, match, kRE2)) {
         CHECK_EQ(match.size(), 4u);
 
-        parseVersion(match.str(1), match.str(2));
+        invalid |= !parseVersion(match.str(1), match.str(2));
         mName = match.str(3);
     } else if (std::regex_match(s, match, kRE3)) {
         CHECK_EQ(match.size(), 4u);
 
         mPackage = match.str(1);
-        parseVersion(match.str(2), match.str(3));
+        invalid |= !parseVersion(match.str(2), match.str(3));
     } else if (std::regex_match(s, match, kRE4)) {
         mName = match.str(0);
     } else if (std::regex_match(s, match, kRE5)) {
@@ -147,13 +134,13 @@ bool FQName::setTo(const std::string &s) {
         CHECK_EQ(match.size(), 6u);
 
         mPackage = match.str(1);
-        parseVersion(match.str(2), match.str(3));
+        invalid |= !parseVersion(match.str(2), match.str(3));
         mName = match.str(4);
         mValueName = match.str(5);
     } else if (std::regex_match(s, match, kRE7)) {
         CHECK_EQ(match.size(), 5u);
 
-        parseVersion(match.str(1), match.str(2));
+        invalid |= !parseVersion(match.str(1), match.str(2));
         mName = match.str(3);
         mValueName = match.str(4);
     } else if (std::regex_match(s, match, kRE8)) {
@@ -162,19 +149,19 @@ bool FQName::setTo(const std::string &s) {
         mName = match.str(1);
         mValueName = match.str(2);
     } else {
-        mValid = false;
+        invalid = true;
     }
 
     // mValueName must go with mName.
     CHECK(mValueName.empty() || !mName.empty());
 
     // package without version is not allowed.
-    CHECK(mPackage.empty() || !version().empty());
+    CHECK(invalid || mPackage.empty() || !version().empty());
 
-    return isValid();
+    return !invalid;
 }
 
-std::string FQName::package() const {
+const std::string& FQName::package() const {
     return mPackage;
 }
 
@@ -197,36 +184,58 @@ std::string FQName::atVersion() const {
     return v.empty() ? "" : ("@" + v);
 }
 
-void FQName::setVersion(const std::string &v) {
-    if (v.empty()) {
-        clearVersion();
-        return;
-    }
-    std::smatch match;
-    if (std::regex_match(v, match, kREVer)) {
-        CHECK_EQ(match.size(), 3u);
+void FQName::clear() {
+    mIsIdentifier = false;
+    mPackage.clear();
+    clearVersion();
+    mName.clear();
+    mValueName.clear();
+}
 
-        parseVersion(match.str(1), match.str(2));
-    } else {
-        mValid = false;
+void FQName::clearVersion(size_t* majorVer, size_t* minorVer) {
+    *majorVer = *minorVer = 0;
+}
+
+bool FQName::parseVersion(const std::string& majorStr, const std::string& minorStr,
+                          size_t* majorVer, size_t* minorVer) {
+    bool versionParseSuccess = ::android::base::ParseUint(majorStr, majorVer) &&
+                               ::android::base::ParseUint(minorStr, minorVer);
+    if (!versionParseSuccess) {
+        LOG(ERROR) << "numbers in " << majorStr << "." << minorStr << " are out of range.";
     }
+    return versionParseSuccess;
+}
+
+bool FQName::parseVersion(const std::string& v, size_t* majorVer, size_t* minorVer) {
+    static const std::regex kREVer("(" RE_MAJOR ")[.](" RE_MINOR ")");
+
+    if (v.empty()) {
+        clearVersion(majorVer, minorVer);
+        return true;
+    }
+
+    std::smatch match;
+    if (!std::regex_match(v, match, kREVer)) {
+        return false;
+    }
+    CHECK_EQ(match.size(), 3u);
+
+    return parseVersion(match.str(1), match.str(2), majorVer, minorVer);
+}
+
+bool FQName::setVersion(const std::string& v) {
+    return parseVersion(v, &mMajor, &mMinor);
 }
 
 void FQName::clearVersion() {
-    mMajor = mMinor = 0;
+    clearVersion(&mMajor, &mMinor);
 }
 
-void FQName::parseVersion(const std::string &majorStr, const std::string &minorStr) {
-    bool versionParseSuccess =
-        ::android::base::ParseUint(majorStr, &mMajor) &&
-        ::android::base::ParseUint(minorStr, &mMinor);
-    if (!versionParseSuccess) {
-        LOG(ERROR) << "numbers in " << majorStr << "." << minorStr << " are out of range.";
-        mValid = false;
-    }
+bool FQName::parseVersion(const std::string& majorStr, const std::string& minorStr) {
+    return parseVersion(majorStr, minorStr, &mMajor, &mMinor);
 }
 
-std::string FQName::name() const {
+const std::string& FQName::name() const {
     return mName;
 }
 
@@ -240,7 +249,7 @@ std::vector<std::string> FQName::names() const {
     return res;
 }
 
-std::string FQName::valueName() const {
+const std::string& FQName::valueName() const {
     return mValueName;
 }
 
@@ -260,13 +269,11 @@ void FQName::applyDefaults(
     }
 
     if (version().empty()) {
-        setVersion(defaultVersion);
+        CHECK(setVersion(defaultVersion));
     }
 }
 
 std::string FQName::string() const {
-    CHECK(mValid);
-
     std::string out;
     out.append(mPackage);
     out.append(atVersion());
@@ -285,15 +292,6 @@ std::string FQName::string() const {
     return out;
 }
 
-void FQName::print() const {
-    if (!mValid) {
-        LOG(INFO) << "INVALID";
-        return;
-    }
-
-    LOG(INFO) << string();
-}
-
 bool FQName::operator<(const FQName &other) const {
     return string() < other.string();
 }
@@ -306,9 +304,8 @@ bool FQName::operator!=(const FQName &other) const {
     return !(*this == other);
 }
 
-std::string FQName::getInterfaceName() const {
-    CHECK(names().size() == 1) << "Must be a top level type";
-    CHECK(!mName.empty() && mName[0] == 'I') << mName;
+const std::string& FQName::getInterfaceName() const {
+    CHECK(isInterfaceName()) << mName;
 
     return mName;
 }
@@ -457,6 +454,13 @@ bool FQName::hasVersion() const {
     return mMajor > 0;
 }
 
+FQName FQName::withVersion(size_t major, size_t minor) const {
+    FQName ret(*this);
+    ret.mMajor = major;
+    ret.mMinor = minor;
+    return ret;
+}
+
 size_t FQName::getPackageMajorVersion() const {
     CHECK(hasVersion()) << "FQName: No version exists at getPackageMajorVersion(). "
                         << "Did you check hasVersion()?";
@@ -531,6 +535,9 @@ FQName FQName::downRev() const {
     ret.mMinor--;
     return ret;
 }
+
+const FQName gIBaseFqName = FQName("android.hidl.base", "1.0", "IBase");
+const FQName gIManagerFqName = FQName("android.hidl.manager", "1.0", "IServiceManager");
 
 }  // namespace android
 

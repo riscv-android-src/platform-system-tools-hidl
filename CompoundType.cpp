@@ -374,7 +374,7 @@ void CompoundType::emitResolveReferencesEmbedded(
     handleError(out, mode);
 }
 
-status_t CompoundType::emitTypeDeclarations(Formatter &out) const {
+void CompoundType::emitTypeDeclarations(Formatter& out) const {
     out << ((mStyle == STYLE_STRUCT) ? "struct" : "union")
         << " "
         << localName()
@@ -395,7 +395,7 @@ status_t CompoundType::emitTypeDeclarations(Formatter &out) const {
         out.unindent();
         out << "};\n\n";
 
-        return OK;
+        return;
     }
 
     for (int pass = 0; pass < 2; ++pass) {
@@ -451,15 +451,13 @@ status_t CompoundType::emitTypeDeclarations(Formatter &out) const {
         << ") == "
         << structAlign
         << ", \"wrong alignment\");\n\n";
-
-    return OK;
 }
 
 void CompoundType::emitTypeForwardDeclaration(Formatter& out) const {
     out << ((mStyle == STYLE_STRUCT) ? "struct" : "union") << " " << localName() << ";\n";
 }
 
-status_t CompoundType::emitPackageTypeDeclarations(Formatter& out) const {
+void CompoundType::emitPackageTypeDeclarations(Formatter& out) const {
     Scope::emitPackageTypeDeclarations(out);
 
     // TODO(b/65200821): remove these ifdefs
@@ -520,11 +518,9 @@ status_t CompoundType::emitPackageTypeDeclarations(Formatter& out) const {
         out << "// operator== and operator!= are not generated for " << localName() << "\n\n";
     }
     out << "#endif  // REALLY_IS_HIDL_INTERNAL_LIB\n";
-
-    return OK;
 }
 
-status_t CompoundType::emitPackageHwDeclarations(Formatter& out) const {
+void CompoundType::emitPackageHwDeclarations(Formatter& out) const {
     if (needsEmbeddedReadWrite()) {
         out << "::android::status_t readEmbeddedFromParcel(\n";
 
@@ -563,17 +559,11 @@ status_t CompoundType::emitPackageHwDeclarations(Formatter& out) const {
             << "size_t parentHandle, size_t parentOffset);\n\n";
         out.unindent(2);
     }
-
-    return OK;
 }
 
-status_t CompoundType::emitTypeDefinitions(Formatter& out, const std::string& prefix) const {
+void CompoundType::emitTypeDefinitions(Formatter& out, const std::string& prefix) const {
     std::string space = prefix.empty() ? "" : (prefix + "::");
-    status_t err = Scope::emitTypeDefinitions(out, space + localName());
-
-    if (err != OK) {
-        return err;
-    }
+    Scope::emitTypeDefinitions(out, space + localName());
 
     if (needsEmbeddedReadWrite()) {
         emitStructReaderWriter(out, prefix, true /* isReader */);
@@ -631,12 +621,9 @@ status_t CompoundType::emitTypeDefinitions(Formatter& out, const std::string& pr
     } else {
         out << "// operator== and operator!= are not generated for " << localName() << "\n";
     }
-
-    return OK;
 }
 
-status_t CompoundType::emitJavaTypeDeclarations(
-        Formatter &out, bool atTopLevel) const {
+void CompoundType::emitJavaTypeDeclarations(Formatter& out, bool atTopLevel) const {
     out << "public final ";
 
     if (!atTopLevel) {
@@ -727,9 +714,16 @@ status_t CompoundType::emitJavaTypeDeclarations(
 
     out << "public final void readFromParcel(android.os.HwParcel parcel) {\n";
     out.indent();
-    out << "android.os.HwBlob blob = parcel.readBuffer(";
-    out << structSize << "/* size */);\n";
-    out << "readEmbeddedFromParcel(parcel, blob, 0 /* parentOffset */);\n";
+    if (containsInterface()) {
+        for (const auto& field : *mFields) {
+            out << field->name() << " = ";
+            field->type().emitJavaReaderWriter(out, "parcel", field->name(), true);
+        }
+    } else {
+        out << "android.os.HwBlob blob = parcel.readBuffer(";
+        out << structSize << "/* size */);\n";
+        out << "readEmbeddedFromParcel(parcel, blob, 0 /* parentOffset */);\n";
+    }
     out.unindent();
     out << "}\n\n";
 
@@ -738,77 +732,75 @@ status_t CompoundType::emitJavaTypeDeclarations(
     size_t vecAlign, vecSize;
     VectorType::getAlignmentAndSizeStatic(&vecAlign, &vecSize);
 
-    out << "public static final java.util.ArrayList<"
-        << localName()
+    out << "public static final java.util.ArrayList<" << localName()
         << "> readVectorFromParcel(android.os.HwParcel parcel) {\n";
     out.indent();
 
-    out << "java.util.ArrayList<"
-        << localName()
-        << "> _hidl_vec = new java.util.ArrayList();\n";
+    out << "java.util.ArrayList<" << localName() << "> _hidl_vec = new java.util.ArrayList();\n";
 
-    out << "android.os.HwBlob _hidl_blob = parcel.readBuffer(";
-    out << vecSize << " /* sizeof hidl_vec<T> */);\n\n";
+    if (containsInterface()) {
+        out << "int size = parcel.readInt32();\n";
+        out << "for(int i = 0 ; i < size; i ++) {\n";
+        out.indent();
+        out << fullJavaName() << " tmp = ";
+        emitJavaReaderWriter(out, "parcel", "tmp", true);
+        out << "_hidl_vec.add(tmp);\n";
+        out.unindent();
+        out << "}\n";
+    } else {
+        out << "android.os.HwBlob _hidl_blob = parcel.readBuffer(";
+        out << vecSize << " /* sizeof hidl_vec<T> */);\n\n";
 
-    VectorType::EmitJavaFieldReaderWriterForElementType(
-            out,
-            0 /* depth */,
-            this,
-            "parcel",
-            "_hidl_blob",
-            "_hidl_vec",
-            "0",
-            true /* isReader */);
-
-    out << "\nreturn _hidl_vec;\n";
-
-    out.unindent();
-    out << "}\n\n";
-
-    ////////////////////////////////////////////////////////////////////////////
-
-    out << "public final void readEmbeddedFromParcel(\n";
-    out.indent(2);
-    out << "android.os.HwParcel parcel, android.os.HwBlob _hidl_blob, long _hidl_offset) {\n";
-    out.unindent();
-
-    size_t offset = 0;
-    for (const auto &field : *mFields) {
-        size_t fieldAlign, fieldSize;
-        field->type().getAlignmentAndSize(&fieldAlign, &fieldSize);
-
-        size_t pad = offset % fieldAlign;
-        if (pad > 0) {
-            offset += fieldAlign - pad;
-        }
-
-        field->type().emitJavaFieldReaderWriter(
-                out,
-                0 /* depth */,
-                "parcel",
-                "_hidl_blob",
-                field->name(),
-                "_hidl_offset + " + std::to_string(offset),
-                true /* isReader */);
-
-        offset += fieldSize;
+        VectorType::EmitJavaFieldReaderWriterForElementType(out, 0 /* depth */, this, "parcel",
+                                                            "_hidl_blob", "_hidl_vec", "0",
+                                                            true /* isReader */);
     }
-
+    out << "\nreturn _hidl_vec;\n";
     out.unindent();
     out << "}\n\n";
+    ////////////////////////////////////////////////////////////////////////////
+    if (containsInterface()) {
+        out << "// readEmbeddedFromParcel is not generated()\n";
+    } else {
+        out << "public final void readEmbeddedFromParcel(\n";
+        out.indent(2);
+        out << "android.os.HwParcel parcel, android.os.HwBlob _hidl_blob, long _hidl_offset) {\n";
+        out.unindent();
+        size_t offset = 0;
+        for (const auto& field : *mFields) {
+            size_t fieldAlign, fieldSize;
+            field->type().getAlignmentAndSize(&fieldAlign, &fieldSize);
+
+            size_t pad = offset % fieldAlign;
+            if (pad > 0) {
+                offset += fieldAlign - pad;
+            }
+
+            field->type().emitJavaFieldReaderWriter(
+                out, 0 /* depth */, "parcel", "_hidl_blob", field->name(),
+                "_hidl_offset + " + std::to_string(offset), true /* isReader */);
+            offset += fieldSize;
+        }
+        out.unindent();
+        out << "}\n\n";
+    }
 
     ////////////////////////////////////////////////////////////////////////////
 
     out << "public final void writeToParcel(android.os.HwParcel parcel) {\n";
     out.indent();
 
-    out << "android.os.HwBlob _hidl_blob = new android.os.HwBlob("
-        << structSize
-        << " /* size */);\n";
+    if (containsInterface()) {
+        for (const auto& field : *mFields) {
+            field->type().emitJavaReaderWriter(out, "parcel", field->name(), false);
+        }
+    } else {
+        out << "android.os.HwBlob _hidl_blob = new android.os.HwBlob(" << structSize
+            << " /* size */);\n";
 
-    out << "writeEmbeddedToBlob(_hidl_blob, 0 /* parentOffset */);\n"
-        << "parcel.writeBuffer(_hidl_blob);\n";
-
+        out << "writeEmbeddedToBlob(_hidl_blob, 0 /* parentOffset */);\n"
+            << "parcel.writeBuffer(_hidl_blob);\n";
+    }
     out.unindent();
     out << "}\n\n";
 
@@ -816,65 +808,56 @@ status_t CompoundType::emitJavaTypeDeclarations(
 
     out << "public static final void writeVectorToParcel(\n";
     out.indent(2);
-    out << "android.os.HwParcel parcel, java.util.ArrayList<"
-        << localName()
-        << "> _hidl_vec) {\n";
+    out << "android.os.HwParcel parcel, java.util.ArrayList<" << localName() << "> _hidl_vec) {\n";
     out.unindent();
 
-    out << "android.os.HwBlob _hidl_blob = new android.os.HwBlob("
-        << vecSize << " /* sizeof(hidl_vec<T>) */);\n";
+    if (containsInterface()) {
+        out << "parcel.writeInt32(_hidl_vec.size());\n";
+        out << "for(" << fullJavaName() << " tmp: _hidl_vec)\n";
+        out.indent();
+        emitJavaReaderWriter(out, "parcel", "tmp", false);
+        out.unindent();
+    } else {
+        out << "android.os.HwBlob _hidl_blob = new android.os.HwBlob(" << vecSize
+            << " /* sizeof(hidl_vec<T>) */);\n";
 
-    VectorType::EmitJavaFieldReaderWriterForElementType(
-            out,
-            0 /* depth */,
-            this,
-            "parcel",
-            "_hidl_blob",
-            "_hidl_vec",
-            "0",
-            false /* isReader */);
+        VectorType::EmitJavaFieldReaderWriterForElementType(out, 0 /* depth */, this, "parcel",
+                                                            "_hidl_blob", "_hidl_vec", "0",
+                                                            false /* isReader */);
 
-    out << "\nparcel.writeBuffer(_hidl_blob);\n";
-
+        out << "\nparcel.writeBuffer(_hidl_blob);\n";
+    }
     out.unindent();
     out << "}\n\n";
-
     ////////////////////////////////////////////////////////////////////////////
 
-    out << "public final void writeEmbeddedToBlob(\n";
-    out.indent(2);
-    out << "android.os.HwBlob _hidl_blob, long _hidl_offset) {\n";
-    out.unindent();
-
-    offset = 0;
-    for (const auto &field : *mFields) {
-        size_t fieldAlign, fieldSize;
-        field->type().getAlignmentAndSize(&fieldAlign, &fieldSize);
-
-        size_t pad = offset % fieldAlign;
-        if (pad > 0) {
-            offset += fieldAlign - pad;
+    if (containsInterface()) {
+        out << "// writeEmbeddedFromParcel() is not generated\n";
+    } else {
+        out << "public final void writeEmbeddedToBlob(\n";
+        out.indent(2);
+        out << "android.os.HwBlob _hidl_blob, long _hidl_offset) {\n";
+        out.unindent();
+        size_t offset = 0;
+        for (const auto& field : *mFields) {
+            size_t fieldAlign, fieldSize;
+            field->type().getAlignmentAndSize(&fieldAlign, &fieldSize);
+            size_t pad = offset % fieldAlign;
+            if (pad > 0) {
+                offset += fieldAlign - pad;
+            }
+            field->type().emitJavaFieldReaderWriter(
+                out, 0 /* depth */, "parcel", "_hidl_blob", field->name(),
+                "_hidl_offset + " + std::to_string(offset), false /* isReader */);
+            offset += fieldSize;
         }
 
-        field->type().emitJavaFieldReaderWriter(
-                out,
-                0 /* depth */,
-                "parcel",
-                "_hidl_blob",
-                field->name(),
-                "_hidl_offset + " + std::to_string(offset),
-                false /* isReader */);
-
-        offset += fieldSize;
+        out.unindent();
+        out << "}\n";
     }
 
     out.unindent();
-    out << "}\n";
-
-    out.unindent();
     out << "};\n\n";
-
-    return OK;
 }
 
 void CompoundType::emitStructReaderWriter(
@@ -1056,7 +1039,7 @@ bool CompoundType::resultNeedsDeref() const {
     return !containsInterface() ;
 }
 
-status_t CompoundType::emitVtsTypeDeclarations(Formatter &out) const {
+void CompoundType::emitVtsTypeDeclarations(Formatter& out) const {
     out << "name: \"" << fullName() << "\"\n";
     out << "type: " << getVtsType() << "\n";
 
@@ -1075,10 +1058,7 @@ status_t CompoundType::emitVtsTypeDeclarations(Formatter &out) const {
             }
         }
         out.indent();
-        status_t status(type->emitVtsTypeDeclarations(out));
-        if (status != OK) {
-            return status;
-        }
+        type->emitVtsTypeDeclarations(out);
         out.unindent();
         out << "}\n";
     }
@@ -1099,21 +1079,15 @@ status_t CompoundType::emitVtsTypeDeclarations(Formatter &out) const {
         }
         out.indent();
         out << "name: \"" << field->name() << "\"\n";
-        status_t status = field->type().emitVtsAttributeType(out);
-        if (status != OK) {
-            return status;
-        }
+        field->type().emitVtsAttributeType(out);
         out.unindent();
         out << "}\n";
     }
-
-    return OK;
 }
 
-status_t CompoundType::emitVtsAttributeType(Formatter &out) const {
+void CompoundType::emitVtsAttributeType(Formatter& out) const {
     out << "type: " << getVtsType() << "\n";
     out << "predefined_type: \"" << fullName() << "\"\n";
-    return OK;
 }
 
 bool CompoundType::deepIsJavaCompatible(std::unordered_set<const Type*>* visited) const {

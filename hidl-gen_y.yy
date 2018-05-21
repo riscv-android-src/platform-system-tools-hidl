@@ -464,8 +464,8 @@ require_semicolon
 fqname
     : FQNAME
       {
-          $$ = new FQName($1);
-          if(!$$->isValid()) {
+          $$ = new FQName();
+          if(!FQName::parse($1, $$)) {
               std::cerr << "ERROR: FQName '" << $1 << "' is not valid at "
                         << @1
                         << ".\n";
@@ -474,8 +474,8 @@ fqname
       }
     | valid_type_name
       {
-          $$ = new FQName($1);
-          if(!$$->isValid()) {
+          $$ = new FQName();
+          if(!FQName::parse($1, $$)) {
               std::cerr << "ERROR: FQName '" << $1 << "' is not valid at "
                         << @1
                         << ".\n";
@@ -623,7 +623,7 @@ interface_declaration
     : INTERFACE valid_type_name opt_extends
       {
           Reference<Type>* superType = $3;
-          bool isIBase = ast->package().package() == gIBasePackageFqName.string();
+          bool isIBase = ast->package().package() == gIBaseFqName.package();
 
           if (isIBase) {
               if (superType != nullptr) {
@@ -662,7 +662,8 @@ interface_declaration
           }
 
           Interface* iface = new Interface(
-              $2, ast->makeFullName($2, *scope), convertYYLoc(@2), *scope, *superType);
+              $2, ast->makeFullName($2, *scope), convertYYLoc(@2),
+              *scope, *superType, ast->getFileHash());
 
           enterScope(ast, scope, iface);
       }
@@ -771,6 +772,11 @@ method_declaration
       }
     | opt_annotations valid_identifier '(' typed_vars ')' GENERATES '(' typed_vars ')' require_semicolon
       {
+          if ($8->empty()) {
+              std::cerr << "ERROR: generates clause used without result at " << @1 << "\n";
+              ast->addSyntaxError();
+          }
+
           $$ = new Method($2 /* name */,
                           $4 /* args */,
                           $8 /* results */,
@@ -809,6 +815,17 @@ typed_var
     : type valid_identifier
       {
           $$ = new NamedReference<Type>($2, *$1, convertYYLoc(@2));
+      }
+    | type
+      {
+          $$ = new NamedReference<Type>("", *$1, convertYYLoc(@1));
+
+          const std::string typeName = $$->isResolved()
+              ? $$->get()->typeName() : $$->getLookupFqName().string();
+
+          std::cerr << "ERROR: variable of type " << typeName
+              << " is missing a variable name at " << @1 << "\n";
+          ast->addSyntaxError();
       }
     ;
 

@@ -33,7 +33,6 @@
 #include <unordered_map>
 
 #include <android-base/logging.h>
-#include <hidl-hash/Hash.h>
 #include <hidl-util/Formatter.h>
 #include <hidl-util/StringHelper.h>
 
@@ -70,11 +69,15 @@ enum {
 };
 
 Interface::Interface(const char* localName, const FQName& fullName, const Location& location,
-                     Scope* parent, const Reference<Type>& superType)
-    : Scope(localName, fullName, location, parent), mSuperType(superType) {}
+                     Scope* parent, const Reference<Type>& superType, const Hash* fileHash)
+    : Scope(localName, fullName, location, parent), mSuperType(superType), mFileHash(fileHash) {}
 
 std::string Interface::typeName() const {
     return "interface " + localName();
+}
+
+const Hash* Interface::getFileHash() const {
+    return mFileHash;
 }
 
 bool Interface::fillPingMethod(Method *method) const {
@@ -102,7 +105,6 @@ bool Interface::fillPingMethod(Method *method) const {
                     out << "return;\n";
                 }
             },
-            {IMPL_STUB, nullptr /* don't generate code */}
         } /*javaImpl*/
     );
 
@@ -139,7 +141,7 @@ bool Interface::fillLinkToDeathMethod(Method *method) const {
             {
                 {IMPL_INTERFACE,
                     [](auto &out) {
-                        out << "return true;";
+                        out << "return true;\n";
                     }
                 },
                 {IMPL_PROXY,
@@ -178,7 +180,7 @@ bool Interface::fillUnlinkToDeathMethod(Method *method) const {
                                     << "_hidl_mDeathRecipients.erase(it);\n"
                                     << "return status == ::android::OK;\n";
                                 });
-                            });
+                            }).endl();
                         out << "}\n";
                         out << "return false;\n";
                     }
@@ -210,10 +212,10 @@ bool Interface::fillSyspropsChangedMethod(Method *method) const {
             HIDL_SYSPROPS_CHANGED_TRANSACTION,
             { { IMPL_INTERFACE, [](auto &out) {
                 out << "::android::report_sysprop_change();\n";
-                out << "return ::android::hardware::Void();";
+                out << "return ::android::hardware::Void();\n";
             } } }, /*cppImpl */
             { { IMPL_INTERFACE, [](auto &out) { /* javaImpl */
-                out << "android.os.HwBinder.reportSyspropChanged();";
+                out << "android.os.HwBinder.enableInstrumentation();\n";
             } } } /*javaImpl */
     );
     return true;
@@ -279,27 +281,28 @@ bool Interface::fillDescriptorChainMethod(Method *method) const {
                     out << ",\n";
                 out << chain[i]->fullJavaName() << ".kInterfaceName";
             }
-            out << "));";
+            out << "));\n";
             out.unindent(); out.unindent();
         } } } /* javaImpl */
     );
     return true;
 }
 
-static void emitDigestChain(
+void Interface::emitDigestChain(
     Formatter& out, const std::string& prefix, const std::vector<const Interface*>& chain,
-    std::function<std::string(std::unique_ptr<ConstantExpression>)> byteToString) {
-    out.join(chain.begin(), chain.end(), ",\n", [&] (const auto &iface) {
-        const Hash &hash = Hash::getHash(iface->location().begin().filename());
+    std::function<std::string(std::unique_ptr<ConstantExpression>)> byteToString) const {
+    out.join(chain.begin(), chain.end(), ",\n", [&](const auto& iface) {
         out << prefix;
         out << "{";
-        out.join(hash.raw().begin(), hash.raw().end(), ",", [&](const auto &e) {
-            // Use ConstantExpression::cppValue / javaValue
-            // because Java used signed byte for uint8_t.
-            out << byteToString(ConstantExpression::ValueOf(ScalarType::Kind::KIND_UINT8, e));
-        });
+        out.join(
+            iface->getFileHash()->raw().begin(), iface->getFileHash()->raw().end(), ",",
+            [&](const auto& e) {
+                // Use ConstantExpression::cppValue / javaValue
+                // because Java used signed byte for uint8_t.
+                out << byteToString(ConstantExpression::ValueOf(ScalarType::Kind::KIND_UINT8, e));
+            });
         out << "} /* ";
-        out << hash.hexString();
+        out << iface->getFileHash()->hexString();
         out << " */";
     });
 }
@@ -350,7 +353,7 @@ bool Interface::fillGetDescriptorMethod(Method *method) const {
             out << "_hidl_cb("
                 << fullName()
                 << "::descriptor);\n"
-                << "return ::android::hardware::Void();";
+                << "return ::android::hardware::Void();\n";
         } } }, /* cppImpl */
         { { IMPL_INTERFACE, [this](auto &out) {
             out << "return "
@@ -382,7 +385,7 @@ bool Interface::fillGetDebugInfoMethod(Method *method) const {
                     out << "_hidl_cb({ -1 /* pid */, 0 /* ptr */, \n"
                         << sArch
                         << "});\n"
-                        << "return ::android::hardware::Void();";
+                        << "return ::android::hardware::Void();\n";
                 }
             },
             {IMPL_STUB_IMPL,
@@ -395,7 +398,7 @@ bool Interface::fillGetDebugInfoMethod(Method *method) const {
                             << sArch << "\n";
                     });
                     out << ");\n"
-                        << "return ::android::hardware::Void();";
+                        << "return ::android::hardware::Void();\n";
                 }
             }
         }, /* cppImpl */
@@ -406,7 +409,7 @@ bool Interface::fillGetDebugInfoMethod(Method *method) const {
                 << "info.pid = android.os.HidlSupport.getPidIfSharable();\n"
                 << "info.ptr = 0;\n"
                 << "info.arch = android.hidl.base.V1_0.DebugInfo.Architecture.UNKNOWN;\n"
-                << "return info;";
+                << "return info;\n";
         } } } /* javaImpl */
     );
 
@@ -425,7 +428,7 @@ bool Interface::fillDebugMethod(Method *method) const {
                 [](auto &out) {
                     out << "(void)fd;\n"
                         << "(void)options;\n"
-                        << "return ::android::hardware::Void();";
+                        << "return ::android::hardware::Void();\n";
                 }
             },
         }, /* cppImpl */
@@ -528,7 +531,12 @@ status_t Interface::validate() const {
         return UNKNOWN_ERROR;
     }
 
-    status_t err = validateUniqueNames();
+    status_t err;
+
+    err = validateUniqueNames();
+    if (err != OK) return err;
+
+    err = validateAnnotations();
     if (err != OK) return err;
 
     return Scope::validate();
@@ -570,6 +578,24 @@ status_t Interface::validateUniqueNames() const {
         registeredMethodNames[method->name()] = this;
     }
 
+    return OK;
+}
+
+status_t Interface::validateAnnotations() const {
+    for (const Method* method : methods()) {
+        for (const Annotation* annotation : method->annotations()) {
+            const std::string name = annotation->name();
+
+            if (name == "entry" || name == "exit" || name == "callflow") {
+                continue;
+            }
+
+            std::cerr << "ERROR: Unrecognized annotation '" << name
+                      << "' for method: " << method->name() << ". An annotation should be one of: "
+                      << "entry, exit, callflow." << std::endl;
+            return UNKNOWN_ERROR;
+        }
+    }
     return OK;
 }
 
@@ -819,11 +845,8 @@ void Interface::emitReaderWriter(
     }
 }
 
-status_t Interface::emitPackageTypeDeclarations(Formatter& out) const {
-    status_t status = Scope::emitPackageTypeDeclarations(out);
-    if (status != OK) {
-        return status;
-    }
+void Interface::emitPackageTypeDeclarations(Formatter& out) const {
+    Scope::emitPackageTypeDeclarations(out);
 
     // TODO(b/65200821): remove these ifndefs
     out << "#ifdef REALLY_IS_HIDL_INTERNAL_LIB" << gCurrentCompileName << "\n";
@@ -841,16 +864,11 @@ status_t Interface::emitPackageTypeDeclarations(Formatter& out) const {
             << "return os;\n";
     }).endl().endl();
     out << "#endif  // REALLY_IS_HIDL_INTERNAL_LIB\n";
-
-    return OK;
 }
 
-status_t Interface::emitTypeDefinitions(Formatter& out, const std::string& prefix) const {
+void Interface::emitTypeDefinitions(Formatter& out, const std::string& prefix) const {
     std::string space = prefix.empty() ? "" : (prefix + "::");
-    status_t err = Scope::emitTypeDefinitions(out, space + localName());
-    if (err != OK) {
-        return err;
-    }
+    Scope::emitTypeDefinitions(out, space + localName());
 
     // TODO(b/65200821): remove toString from .cpp once all prebuilts are rebuilt
     out << "std::string toString("
@@ -864,8 +882,6 @@ status_t Interface::emitTypeDefinitions(Formatter& out, const std::string& prefi
             << "os += o->isRemote() ? \"@remote\" : \"@local\";\n"
             << "return os;\n";
     }).endl().endl();
-
-    return OK;
 }
 
 void Interface::emitJavaReaderWriter(
@@ -888,7 +904,7 @@ void Interface::emitJavaReaderWriter(
     }
 }
 
-status_t Interface::emitVtsAttributeDeclaration(Formatter &out) const {
+void Interface::emitVtsAttributeDeclaration(Formatter& out) const {
     for (const auto &type : getSubTypes()) {
         // Skip for TypeDef as it is just an alias of a defined type.
         if (type->isTypeDef()) {
@@ -896,17 +912,13 @@ status_t Interface::emitVtsAttributeDeclaration(Formatter &out) const {
         }
         out << "attribute: {\n";
         out.indent();
-        status_t status = type->emitVtsTypeDeclarations(out);
-        if (status != OK) {
-            return status;
-        }
+        type->emitVtsTypeDeclarations(out);
         out.unindent();
         out << "}\n\n";
     }
-    return OK;
 }
 
-status_t Interface::emitVtsMethodDeclaration(Formatter &out) const {
+void Interface::emitVtsMethodDeclaration(Formatter& out) const {
     for (const auto &method : methods()) {
         if (method->isHidlReserved()) {
             continue;
@@ -919,10 +931,7 @@ status_t Interface::emitVtsMethodDeclaration(Formatter &out) const {
         for (const auto &result : method->results()) {
             out << "return_type_hidl: {\n";
             out.indent();
-            status_t status = result->type().emitVtsAttributeType(out);
-            if (status != OK) {
-                return status;
-            }
+            result->type().emitVtsAttributeType(out);
             out.unindent();
             out << "}\n";
         }
@@ -930,10 +939,7 @@ status_t Interface::emitVtsMethodDeclaration(Formatter &out) const {
         for (const auto &arg : method->args()) {
             out << "arg: {\n";
             out.indent();
-            status_t status = arg->type().emitVtsAttributeType(out);
-            if (status != OK) {
-                return status;
-            }
+            arg->type().emitVtsAttributeType(out);
             out.unindent();
             out << "}\n";
         }
@@ -941,7 +947,7 @@ status_t Interface::emitVtsMethodDeclaration(Formatter &out) const {
         for (const auto &annotation : method->annotations()) {
             out << "callflow: {\n";
             out.indent();
-            std::string name = annotation->name();
+            const std::string name = annotation->name();
             if (name == "entry") {
                 out << "entry: true\n";
             } else if (name == "exit") {
@@ -955,11 +961,7 @@ status_t Interface::emitVtsMethodDeclaration(Formatter &out) const {
                     }
                 }
             } else {
-                std::cerr << "ERROR: Unrecognized annotation '" << name
-                          << "' for method: " << method->name()
-                          << ". A VTS annotation should be one of: "
-                          << "entry, exit, callflow." << std::endl;
-                return UNKNOWN_ERROR;
+                CHECK(false);
             }
             out.unindent();
             out << "}\n";
@@ -967,15 +969,13 @@ status_t Interface::emitVtsMethodDeclaration(Formatter &out) const {
         out.unindent();
         out << "}\n\n";
     }
-    return OK;
 }
 
-status_t Interface::emitVtsAttributeType(Formatter &out) const {
+void Interface::emitVtsAttributeType(Formatter& out) const {
     out << "type: " << getVtsType() << "\n"
         << "predefined_type: \""
         << fullName()
         << "\"\n";
-    return OK;
 }
 
 bool Interface::hasOnewayMethods() const {
