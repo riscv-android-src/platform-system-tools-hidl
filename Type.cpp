@@ -322,13 +322,13 @@ status_t Type::checkForwardReferenceRestrictions(const Reference<Type>& ref) con
 }
 
 const ScalarType *Type::resolveToScalarType() const {
-    return NULL;
+    return nullptr;
 }
 
 bool Type::isValidEnumStorageType() const {
     const ScalarType *scalarType = resolveToScalarType();
 
-    if (scalarType == NULL) {
+    if (scalarType == nullptr) {
         return false;
     }
 
@@ -385,8 +385,12 @@ std::string Type::getJavaType(bool /* forInitializer */) const {
     return std::string();
 }
 
-std::string Type::getJavaWrapperType() const {
+std::string Type::getJavaTypeClass() const {
     return getJavaType();
+}
+
+std::string Type::getJavaTypeCast(const std::string& objName) const {
+    return "(" + getJavaType() + ") " + objName;
 }
 
 std::string Type::getJavaSuffix() const {
@@ -512,6 +516,8 @@ void Type::emitJavaFieldInitializer(
         << fieldName
         << ";\n";
 }
+
+void Type::emitJavaFieldDefaultInitialValue(Formatter &, const std::string &) const {}
 
 void Type::emitJavaFieldReaderWriter(
         Formatter &,
@@ -666,6 +672,10 @@ std::string Type::getCppResultType(bool specifyNamespaces) const {
 
 std::string Type::getCppArgumentType(bool specifyNamespaces) const {
     return getCppType(StorageMode_Argument, specifyNamespaces);
+}
+
+std::string Type::getCppTypeCast(const std::string& objName, bool specifyNamespaces) const {
+    return "(" + getCppStackType(specifyNamespaces) + ") " + objName;
 }
 
 void Type::emitJavaReaderWriterWithSuffix(

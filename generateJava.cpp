@@ -130,7 +130,7 @@ void AST::generateJava(Formatter& out, const std::string& limitToType) const {
 
     out << "public interface " << ifaceName << " extends ";
 
-    if (superType != NULL) {
+    if (superType != nullptr) {
         out << superType->fullJavaName();
     } else {
         out << "android.os.IHwInterface";
@@ -236,6 +236,8 @@ void AST::generateJava(Formatter& out, const std::string& limitToType) const {
             out.unindent();
             out << "}\n\n";
         }
+
+        method->emitDocComment(out);
 
         if (returnsValue && !needsCallback) {
             out << method->results()[0]->type().getJavaType();

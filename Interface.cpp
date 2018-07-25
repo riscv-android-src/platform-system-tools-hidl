@@ -171,13 +171,13 @@ bool Interface::fillUnlinkToDeathMethod(Method *method) const {
                 {IMPL_PROXY,
                     [](auto &out) {
                         out << "std::unique_lock<std::mutex> lock(_hidl_mMutex);\n"
-                            << "for (auto it = _hidl_mDeathRecipients.begin();"
-                            << "it != _hidl_mDeathRecipients.end();"
+                            << "for (auto it = _hidl_mDeathRecipients.rbegin();"
+                            << "it != _hidl_mDeathRecipients.rend();"
                             << "++it) {\n";
                         out.indent([&] {
                             out.sIf("(*it)->getRecipient() == recipient", [&] {
                                 out << "::android::status_t status = remote()->unlinkToDeath(*it);\n"
-                                    << "_hidl_mDeathRecipients.erase(it);\n"
+                                    << "_hidl_mDeathRecipients.erase(it.base()-1);\n"
                                     << "return status == ::android::OK;\n";
                                 });
                             }).endl();
@@ -918,7 +918,7 @@ void Interface::emitVtsAttributeDeclaration(Formatter& out) const {
     }
 }
 
-void Interface::emitVtsMethodDeclaration(Formatter& out) const {
+void Interface::emitVtsMethodDeclaration(Formatter& out, bool isInherited) const {
     for (const auto &method : methods()) {
         if (method->isHidlReserved()) {
             continue;
@@ -927,10 +927,12 @@ void Interface::emitVtsMethodDeclaration(Formatter& out) const {
         out << "api: {\n";
         out.indent();
         out << "name: \"" << method->name() << "\"\n";
+        out << "is_inherited: " << (isInherited ? "true" : "false") << "\n";
         // Generate declaration for each return value.
         for (const auto &result : method->results()) {
             out << "return_type_hidl: {\n";
             out.indent();
+            out << "name: \"" << result->name() << "\"\n";
             result->type().emitVtsAttributeType(out);
             out.unindent();
             out << "}\n";
@@ -939,6 +941,7 @@ void Interface::emitVtsMethodDeclaration(Formatter& out) const {
         for (const auto &arg : method->args()) {
             out << "arg: {\n";
             out.indent();
+            out << "name: \"" << arg->name() << "\"\n";
             arg->type().emitVtsAttributeType(out);
             out.unindent();
             out << "}\n";

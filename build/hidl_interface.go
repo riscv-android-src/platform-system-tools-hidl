@@ -175,7 +175,7 @@ func removeCoreDependencies(mctx android.LoadHookContext, dependencies []string)
 }
 
 func hidlGenCommand(lang string, roots []string, name *fqName) *string {
-	cmd := "$(location hidl-gen) -d $(depfile) -o $(genDir)"
+	cmd := "$(location hidl-gen) -p . -d $(depfile) -o $(genDir)"
 	cmd += " -L" + lang
 	cmd += " " + strings.Join(wrap("-r", roots, ""), " ")
 	cmd += " " + name.string()
@@ -251,13 +251,14 @@ func hidlInterfaceMutator(mctx android.LoadHookContext, i *hidlInterface) {
 
 	if shouldGenerateLibrary {
 		mctx.CreateModule(android.ModuleFactoryAdaptor(cc.LibraryFactory), &ccProperties{
-			Name:              proptools.StringPtr(name.string()),
-			Owner:             i.properties.Owner,
-			Vendor_available:  proptools.BoolPtr(true),
-			Double_loadable:   proptools.BoolPtr(isDoubleLoadable(name.string())),
-			Defaults:          []string{"hidl-module-defaults"},
-			Generated_sources: []string{name.sourcesName()},
-			Generated_headers: []string{name.headersName()},
+			Name:               proptools.StringPtr(name.string()),
+			Owner:              i.properties.Owner,
+			Recovery_available: proptools.BoolPtr(true),
+			Vendor_available:   proptools.BoolPtr(true),
+			Double_loadable:    proptools.BoolPtr(isDoubleLoadable(name.string())),
+			Defaults:           []string{"hidl-module-defaults"},
+			Generated_sources:  []string{name.sourcesName()},
+			Generated_headers:  []string{name.headersName()},
 			Shared_libs: concat(cppDependencies, []string{
 				"libhidlbase",
 				"libhidltransport",
@@ -287,11 +288,12 @@ func hidlInterfaceMutator(mctx android.LoadHookContext, i *hidlInterface) {
 			Out: concat(wrap(name.sanitizedDir()+"I", interfaces, ".java"),
 				wrap(name.sanitizedDir(), i.properties.Types, ".java")),
 		})
-		mctx.CreateModule(android.ModuleFactoryAdaptor(java.LibraryFactory(true)), &javaProperties{
+		mctx.CreateModule(android.ModuleFactoryAdaptor(java.LibraryFactory), &javaProperties{
 			Name:              proptools.StringPtr(name.javaName()),
 			Owner:             i.properties.Owner,
 			Defaults:          []string{"hidl-java-module-defaults"},
 			No_framework_libs: proptools.BoolPtr(true),
+			Installable:       proptools.BoolPtr(true),
 			Srcs:              []string{":" + name.javaSourcesName()},
 			Static_libs:       javaDependencies,
 
@@ -314,7 +316,7 @@ func hidlInterfaceMutator(mctx android.LoadHookContext, i *hidlInterface) {
 			Srcs:    i.properties.Srcs,
 			Out:     []string{name.sanitizedDir() + "Constants.java"},
 		})
-		mctx.CreateModule(android.ModuleFactoryAdaptor(java.LibraryFactory(true)), &javaProperties{
+		mctx.CreateModule(android.ModuleFactoryAdaptor(java.LibraryFactory), &javaProperties{
 			Name:              proptools.StringPtr(name.javaConstantsName()),
 			Owner:             i.properties.Owner,
 			Defaults:          []string{"hidl-java-module-defaults"},
@@ -434,7 +436,7 @@ func lookupInterface(name string) *hidlInterface {
 	return nil
 }
 
-var doubleLoadablePackageNames = []string {
+var doubleLoadablePackageNames = []string{
 	"android.hardware.configstore@",
 	"android.hardware.graphics.allocator@",
 	"android.hardware.graphics.bufferqueue@",

@@ -21,6 +21,7 @@
 #include "ArrayType.h"
 #include "CompoundType.h"
 #include "ConstantExpression.h"
+#include "DocComment.h"
 #include "EnumType.h"
 #include "Interface.h"
 #include "Location.h"
@@ -106,13 +107,22 @@ bool isValidStructField(const std::string& identifier, std::string *errorMsg) {
     return true;
 }
 
+bool isValidCompoundTypeField(CompoundType::Style style, const std::string& identifier,
+                              std::string *errorMsg) {
+    // Unions don't support fix-up types; as such, they can't
+    // have name collisions with embedded read/write methods.
+    if (style == CompoundType::STYLE_UNION) { return true; }
+
+    return isValidStructField(identifier, errorMsg);;
+}
+
 bool isValidIdentifier(const std::string& identifier, std::string *errorMsg) {
     static const std::vector<std::string> keywords({
         "uint8_t", "uint16_t", "uint32_t", "uint64_t",
         "int8_t", "int16_t", "int32_t", "int64_t", "bool", "float", "double",
         "interface", "struct", "union", "string", "vec", "enum", "ref", "handle",
         "package", "import", "typedef", "generates", "oneway", "extends",
-        "fmq_sync", "fmq_unsync",
+        "fmq_sync", "fmq_unsync", "safe_union",
     });
     static const std::vector<std::string> cppKeywords({
         "alignas", "alignof", "and", "and_eq", "asm", "atomic_cancel", "atomic_commit",
@@ -214,6 +224,10 @@ bool isValidTypeName(const std::string& identifier, std::string *errorMsg) {
 %expect-rr 0
 %error-verbose
 
+%debug
+
+%token<docComment> DOC_COMMENT "doc comment"
+
 %token<void> ENUM "keyword `enum`"
 %token<void> EXTENDS "keyword `extends`"
 %token<str> FQNAME "fully-qualified name"
@@ -229,6 +243,7 @@ bool isValidTypeName(const std::string& identifier, std::string *errorMsg) {
 %token<str> STRING_LITERAL "string literal"
 %token<void> TYPEDEF "keyword `typedef`"
 %token<void> UNION "keyword `union`"
+%token<void> SAFE_UNION "keyword `safe_union`"
 %token<templatedType> TEMPLATED "templated type"
 %token<void> ONEWAY "keyword `oneway`"
 %token<str> UNKNOWN "unknown character"
@@ -257,6 +272,8 @@ bool isValidTypeName(const std::string& identifier, std::string *errorMsg) {
 /* Precedence level 3, RTL; but we have to use %left here */
 %left UNARY_MINUS UNARY_PLUS '!' '~'
 
+%type<docComment> doc_comments
+
 %type<str> error_stmt error
 %type<str> package
 %type<fqName> fqname
@@ -267,18 +284,19 @@ bool isValidTypeName(const std::string& identifier, std::string *errorMsg) {
 %type<referenceToType> array_type_base
 %type<arrayType> array_type
 %type<referenceToType> opt_extends
-%type<type> type_declaration type_declaration_body interface_declaration typedef_declaration
+%type<type> type_declaration commentable_type_declaration type_declaration_body
+%type<type> interface_declaration typedef_declaration
 %type<type> named_struct_or_union_declaration named_enum_declaration
 %type<type> compound_declaration annotated_compound_declaration
 
-%type<field> field_declaration
+%type<field> field_declaration commentable_field_declaration
 %type<fields> field_declarations struct_or_union_body
 %type<constantExpression> const_expr
-%type<enumValue> enum_value
+%type<enumValue> enum_value commentable_enum_value
 %type<enumValues> enum_values enum_declaration_body
 %type<typedVars> typed_vars
 %type<typedVar> typed_var
-%type<method> method_declaration
+%type<method> method_declaration commentable_method_declaration
 %type<compoundStyle> struct_or_union_keyword
 %type<stringVec> annotation_string_values annotation_string_value
 %type<constExprVec> annotation_const_expr_values annotation_const_expr_value
@@ -312,14 +330,29 @@ bool isValidTypeName(const std::string& identifier, std::string *errorMsg) {
     android::AnnotationParamVector *annotationParams;
     android::Annotation *annotation;
     std::vector<android::Annotation *> *annotations;
+    android::DocComment* docComment;
 }
 
 %%
 
 program
-    : package
-      imports
-      type_declarations
+    // Don't care if license header is a doc comment or not
+    : DOC_COMMENT package imports type_declarations
+    | package imports type_declarations
+    ;
+
+doc_comments
+    : DOC_COMMENT { $$ = $1; }
+    | doc_comments DOC_COMMENT
+      {
+        $1->merge($2);
+        $$ = $1;
+      }
+    | doc_comments '}'
+      {
+        std::cerr << "ERROR: Doc comments must preceed what they describe at " << @1 << "\n";
+        YYERROR;
+      }
     ;
 
 valid_identifier
@@ -549,7 +582,7 @@ opt_extends
 
 interface_declarations
     : /* empty */
-    | interface_declarations type_declaration
+    | interface_declarations commentable_type_declaration
       {
           CHECK((*scope)->isInterface());
 
@@ -562,7 +595,7 @@ interface_declarations
               YYERROR;
           }
       }
-    | interface_declarations method_declaration
+    | interface_declarations commentable_method_declaration
       {
           CHECK((*scope)->isInterface());
 
@@ -590,7 +623,16 @@ interface_declarations
 type_declarations
     : /* empty */
     | error_stmt
-    | type_declarations type_declaration
+    | type_declarations commentable_type_declaration
+    ;
+
+commentable_type_declaration
+    : doc_comments type_declaration
+      {
+        $2->setDocComment($1);
+        $$ = $2;
+      }
+    | type_declaration { $$ = $1; }
     ;
 
 type_declaration
@@ -750,6 +792,17 @@ const_expr
       }
     ;
 
+commentable_method_declaration
+    : doc_comments method_declaration
+      {
+        if ($2 != nullptr) $2->setDocComment($1);
+        $$ = $2;
+      }
+    | method_declaration
+      {
+        $$ = $1;
+      }
+
 method_declaration
     : error_stmt { $$ = nullptr; }
     | opt_annotations valid_identifier '(' typed_vars ')' require_semicolon
@@ -833,6 +886,7 @@ typed_var
 struct_or_union_keyword
     : STRUCT { $$ = CompoundType::STYLE_STRUCT; }
     | UNION { $$ = CompoundType::STYLE_UNION; }
+    | SAFE_UNION { $$ = CompoundType::STYLE_SAFE_UNION; }
     ;
 
 named_struct_or_union_declaration
@@ -860,7 +914,7 @@ struct_or_union_body
 
 field_declarations
     : /* empty */ { $$ = new std::vector<NamedReference<Type>*>; }
-    | field_declarations field_declaration
+    | field_declarations commentable_field_declaration
       {
           $$ = $1;
 
@@ -871,6 +925,14 @@ field_declarations
       }
     ;
 
+commentable_field_declaration
+    : doc_comments field_declaration
+    {
+      if ($2 != nullptr) $2->setDocComment($1);
+      $$ = $2;
+    }
+    | field_declaration { $$ = $1; }
+
 field_declaration
     : error_stmt { $$ = nullptr; }
     | type_or_inplace_compound_declaration valid_identifier require_semicolon
@@ -878,8 +940,9 @@ field_declaration
           CHECK((*scope)->isCompoundType());
 
           std::string errorMsg;
-          if (static_cast<CompoundType *>(*scope)->style() == CompoundType::STYLE_STRUCT &&
-              !isValidStructField($2, &errorMsg)) {
+          auto style = static_cast<CompoundType *>(*scope)->style();
+
+          if (!isValidCompoundTypeField(style, $2, &errorMsg)) {
               std::cerr << "ERROR: " << errorMsg << " at "
                         << @2 << "\n";
               YYERROR;
@@ -891,9 +954,11 @@ field_declaration
           CHECK((*scope)->isCompoundType());
 
           std::string errorMsg;
-          if (static_cast<CompoundType *>(*scope)->style() == CompoundType::STYLE_STRUCT &&
-              $1 != nullptr && $1->isNamedType() &&
-              !isValidStructField(static_cast<NamedType*>($1)->localName().c_str(), &errorMsg)) {
+          auto style = static_cast<CompoundType *>(*scope)->style();
+
+          if ($1 != nullptr && $1->isNamedType() &&
+              !isValidCompoundTypeField(style, static_cast<NamedType*>(
+                        $1)->localName().c_str(), &errorMsg)) {
               std::cerr << "ERROR: " << errorMsg << " at "
                         << @2 << "\n";
               YYERROR;
@@ -959,6 +1024,15 @@ enum_declaration_body
     : '{' enum_values opt_comma '}' { $$ = $2; }
     ;
 
+commentable_enum_value
+    : doc_comments enum_value
+      {
+        $2->setDocComment($1);
+        $$ = $2;
+      }
+    | enum_value { $$ = $1; }
+    ;
+
 enum_value
     : valid_identifier
       {
@@ -973,24 +1047,24 @@ enum_value
 enum_values
     : /* empty */
       { /* do nothing */ }
-    | enum_value
+    | commentable_enum_value
       {
           CHECK((*scope)->isEnum());
           static_cast<EnumType *>(*scope)->addValue($1);
       }
-    | enum_values ',' enum_value
+    | enum_values ',' commentable_enum_value
       {
           CHECK((*scope)->isEnum());
           static_cast<EnumType *>(*scope)->addValue($3);
       }
-    | error ',' enum_value
+    | error ',' commentable_enum_value
       {
           ast->addSyntaxError();
 
           CHECK((*scope)->isEnum());
           static_cast<EnumType *>(*scope)->addValue($3);
       }
-    | enum_values ',' error ',' enum_value
+    | enum_values ',' error ',' commentable_enum_value
       {
           ast->addSyntaxError();
 

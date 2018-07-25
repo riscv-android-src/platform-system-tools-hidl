@@ -81,7 +81,7 @@ NamedType *Scope::lookupType(const FQName &fqName) const {
 }
 
 LocalIdentifier *Scope::lookupIdentifier(const std::string & /*name*/) const {
-    return NULL;
+    return nullptr;
 }
 
 bool Scope::isScope() const {
@@ -93,10 +93,10 @@ Interface *Scope::getInterface() const {
         return static_cast<Interface *>(mTypes[0]);
     }
 
-    return NULL;
+    return nullptr;
 }
 
-bool Scope::containsInterfaces() const {
+bool Scope::definesInterfaces() const {
     for (const NamedType *type : mTypes) {
         if (type->isInterface()) {
             return true;
@@ -160,6 +160,7 @@ void Scope::emitTypeDeclarations(Formatter& out) const {
     }
 
     for (const Type* type : mTypes) {
+        type->emitDocComment(out);
         type->emitTypeDeclarations(out);
     }
 }
@@ -188,6 +189,7 @@ void Scope::emitJavaTypeDeclarations(Formatter& out, bool atTopLevel) const {
     }
 
     for (const Type* type : mTypes) {
+        type->emitDocComment(out);
         type->emitJavaTypeDeclarations(out, atTopLevel);
     }
 }

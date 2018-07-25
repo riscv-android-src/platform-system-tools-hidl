@@ -168,8 +168,8 @@ std::string EnumType::getJavaSuffix() const {
     return mStorageType->resolveToScalarType()->getJavaSuffix();
 }
 
-std::string EnumType::getJavaWrapperType() const {
-    return mStorageType->resolveToScalarType()->getJavaWrapperType();
+std::string EnumType::getJavaTypeClass() const {
+    return mStorageType->resolveToScalarType()->getJavaTypeClass();
 }
 
 std::string EnumType::getVtsType() const {
@@ -185,8 +185,8 @@ std::string EnumType::getBitfieldJavaType(bool forInitializer) const {
     return resolveToScalarType()->getJavaType(forInitializer);
 }
 
-std::string EnumType::getBitfieldJavaWrapperType() const {
-    return resolveToScalarType()->getJavaWrapperType();
+std::string EnumType::getBitfieldJavaTypeClass() const {
+    return resolveToScalarType()->getJavaTypeClass();
 }
 
 LocalIdentifier *EnumType::lookupIdentifier(const std::string &name) const {
@@ -210,7 +210,7 @@ void EnumType::emitReaderWriter(
         bool isReader,
         ErrorMode mode) const {
     const ScalarType *scalarType = mStorageType->resolveToScalarType();
-    CHECK(scalarType != NULL);
+    CHECK(scalarType != nullptr);
 
     scalarType->emitReaderWriterWithCast(
             out,
@@ -254,6 +254,8 @@ void EnumType::emitTypeDeclarations(Formatter& out) const {
         const auto &type = *it;
 
         for (const auto &entry : type->values()) {
+            entry->emitDocComment(out);
+
             out << entry->name();
 
             std::string value = entry->cppValue(scalarType->getKind());
@@ -415,7 +417,7 @@ void EnumType::emitPackageTypeDeclarations(Formatter& out) const {
             << " o);\n\n";
     out << "#else\n";
     const ScalarType *scalarType = mStorageType->resolveToScalarType();
-    CHECK(scalarType != NULL);
+    CHECK(scalarType != nullptr);
 
     out << "template<typename>\n"
         << "static inline std::string toString(" << resolveToScalarType()->getCppArgumentType()
@@ -473,7 +475,7 @@ void EnumType::emitTypeDefinitions(Formatter& out, const std::string& /* prefix 
     // TODO(b/65200821): remove toString from .cpp once all prebuilts are rebuilt
 
     const ScalarType *scalarType = mStorageType->resolveToScalarType();
-    CHECK(scalarType != NULL);
+    CHECK(scalarType != nullptr);
 
     out << "template<>\n"
         << "std::string toString<" << getCppStackType() << ">("
@@ -531,7 +533,7 @@ void EnumType::emitTypeDefinitions(Formatter& out, const std::string& /* prefix 
 
 void EnumType::emitJavaTypeDeclarations(Formatter& out, bool atTopLevel) const {
     const ScalarType *scalarType = mStorageType->resolveToScalarType();
-    CHECK(scalarType != NULL);
+    CHECK(scalarType != nullptr);
 
     out << "public "
         << (atTopLevel ? "" : "static ")
@@ -550,6 +552,8 @@ void EnumType::emitJavaTypeDeclarations(Formatter& out, bool atTopLevel) const {
         const auto &type = *it;
 
         for (const auto &entry : type->values()) {
+            entry->emitDocComment(out);
+
             out << "public static final "
                 << typeName
                 << " "
@@ -586,7 +590,6 @@ void EnumType::emitJavaTypeDeclarations(Formatter& out, bool atTopLevel) const {
     }).endl();
 
     auto bitfieldType = getBitfieldJavaType(false /* forInitializer */);
-    auto bitfieldWrapperType = getBitfieldJavaWrapperType();
     out << "\n"
         << "public static final String dumpBitfield("
         << bitfieldType << " o) ";
@@ -940,8 +943,8 @@ std::string BitFieldType::getJavaSuffix() const {
     return resolveToScalarType()->getJavaSuffix();
 }
 
-std::string BitFieldType::getJavaWrapperType() const {
-    return getElementEnumType()->getBitfieldJavaWrapperType();
+std::string BitFieldType::getJavaTypeClass() const {
+    return getElementEnumType()->getBitfieldJavaTypeClass();
 }
 
 std::string BitFieldType::getVtsType() const {
