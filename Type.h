@@ -31,10 +31,6 @@
 
 namespace android {
 
-// TODO(b/65200821): remove
-// HACK because no no type can depend or see AST
-extern std::string gCurrentCompileName;
-
 struct ConstantExpression;
 struct Formatter;
 struct FQName;
@@ -242,8 +238,6 @@ struct Type : DocCommentable {
             const std::string &name) const;
 
     virtual bool useParentInEmitResolveReferencesEmbedded() const;
-
-    virtual bool useNameInEmitReaderWriterEmbedded(bool isReader) const;
 
     virtual void emitJavaReaderWriter(
             Formatter &out,

@@ -28,9 +28,6 @@
 
 namespace android {
 
-// TODO(b/65200821): remove
-std::string gCurrentCompileName;
-
 Type::Type(Scope* parent) : mParent(parent) {}
 
 Type::~Type() {}
@@ -473,10 +470,6 @@ void Type::emitJavaDump(
 
 bool Type::useParentInEmitResolveReferencesEmbedded() const {
     return needsResolveReferences();
-}
-
-bool Type::useNameInEmitReaderWriterEmbedded(bool) const {
-    return needsEmbeddedReadWrite();
 }
 
 void Type::emitReaderWriterEmbedded(
