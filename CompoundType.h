@@ -125,6 +125,7 @@ struct CompoundType : public Scope {
     void emitTypeDeclarations(Formatter& out) const override;
     void emitTypeForwardDeclaration(Formatter& out) const override;
     void emitPackageTypeDeclarations(Formatter& out) const override;
+    void emitPackageTypeHeaderDefinitions(Formatter& out) const override;
     void emitPackageHwDeclarations(Formatter& out) const override;
 
     void emitTypeDefinitions(Formatter& out, const std::string& prefix) const override;
@@ -174,6 +175,9 @@ private:
     void emitSafeUnionTypeConstructors(Formatter& out) const;
     void emitSafeUnionTypeDeclarations(Formatter& out) const;
     std::unique_ptr<ScalarType> getUnionDiscriminatorType() const;
+
+    void emitSafeUnionUnknownDiscriminatorError(Formatter& out, const std::string& value,
+                                                bool fatal) const;
 
     void emitSafeUnionCopyAndAssignDefinition(Formatter& out,
                                               const std::string& parameterName,

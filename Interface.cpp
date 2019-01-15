@@ -666,10 +666,6 @@ bool Interface::isInterface() const {
     return true;
 }
 
-bool Interface::isBinder() const {
-    return true;
-}
-
 const std::vector<Method *> &Interface::userDefinedMethods() const {
     return mUserMethods;
 }
@@ -821,13 +817,7 @@ void Interface::emitReaderWriter(
         out << "} else {\n";
         out.indent();
         out << "::android::sp<::android::hardware::IBinder> _hidl_binder = "
-            << "::android::hardware::toBinder<\n";
-        out.indent(2, [&] {
-            out << fqName().cppName()
-                << ">("
-                << name
-                << ");\n";
-        });
+            << "::android::hardware::getOrCreateCachedBinder(" << name << ".get());\n";
         out << "if (_hidl_binder.get() != nullptr) {\n";
         out.indent([&] {
             out << "_hidl_err = "
@@ -848,6 +838,12 @@ void Interface::emitReaderWriter(
 
 void Interface::emitPackageTypeDeclarations(Formatter& out) const {
     Scope::emitPackageTypeDeclarations(out);
+
+    out << "static inline std::string toString(" << getCppArgumentType() << " o);\n\n";
+}
+
+void Interface::emitPackageTypeHeaderDefinitions(Formatter& out) const {
+    Scope::emitPackageTypeHeaderDefinitions(out);
 
     out << "static inline std::string toString(" << getCppArgumentType() << " o) ";
 
@@ -990,7 +986,7 @@ bool Interface::deepIsJavaCompatible(std::unordered_set<const Type*>* visited) c
         }
     }
 
-    return Scope::isJavaCompatible(visited);
+    return Scope::deepIsJavaCompatible(visited);
 }
 
 bool Interface::isNeverStrongReference() const {

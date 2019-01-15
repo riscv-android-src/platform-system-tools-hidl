@@ -16,11 +16,14 @@ cc_defaults {
     name: "hidl-gen-defaults",
     cpp_std: "experimental",
     cflags: [
-        "-O0",
-        "-g",
         "-Wall",
         "-Werror",
     ],
+    target: {
+        host: {
+            cflags: ["-O0", "-g"],
+        }
+    }
 }
 
 // This configuration is inherited by all hidl-gen-generated modules.
@@ -30,6 +33,10 @@ cc_defaults {
         "-Wall",
         "-Werror",
         "-Wextra-semi",
+    ],
+    tidy_checks: [
+        // _hidl_cb and addOnewayTask are stuck because of the legacy ABI
+        "-performance-unnecessary-value-param",
     ],
     product_variables: {
         debuggable: {
@@ -100,6 +107,7 @@ cc_library_host_shared {
         "generateCpp.cpp",
         "generateCppAdapter.cpp",
         "generateCppImpl.cpp",
+        "generateDependencies.cpp",
         "generateJava.cpp",
         "generateVts.cpp",
         "hidl-gen_y.yy",

@@ -44,7 +44,6 @@ struct Interface : public Scope {
 
     bool isElidableType() const override;
     bool isInterface() const override;
-    bool isBinder() const override;
     bool isIBase() const { return fqName() == gIBaseFqName; }
     std::string typeName() const override;
 
@@ -113,6 +112,7 @@ struct Interface : public Scope {
             ErrorMode mode) const override;
 
     void emitPackageTypeDeclarations(Formatter& out) const override;
+    void emitPackageTypeHeaderDefinitions(Formatter& out) const override;
     void emitTypeDefinitions(Formatter& out, const std::string& prefix) const override;
 
     void getAlignmentAndSize(size_t* align, size_t* size) const override;

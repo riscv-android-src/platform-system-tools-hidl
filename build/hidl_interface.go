@@ -15,6 +15,7 @@
 package hidl
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/google/blueprint"
@@ -35,7 +36,7 @@ var (
 	hidlRule = pctx.StaticRule("hidlRule", blueprint.RuleParams{
 		Depfile:     "${depfile}",
 		Deps:        blueprint.DepsGCC,
-		Command:     "rm -rf ${genDir} && ${hidl} -p . -d ${depfile} -o ${genDir} -L ${language} ${roots} ${fqName}",
+		Command:     "rm -rf ${genDir} && ${hidl} -R -p . -d ${depfile} -o ${genDir} -L ${language} ${roots} ${fqName}",
 		CommandDeps: []string{"${hidl}"},
 		Description: "HIDL ${language}: ${in} => ${out}",
 	}, "depfile", "fqName", "genDir", "language", "roots")
@@ -48,6 +49,7 @@ func init() {
 type hidlGenProperties struct {
 	Language   string
 	FqName     string
+	Root       string
 	Interfaces []string
 	Inputs     []string
 	Outputs    []string
@@ -78,15 +80,27 @@ func (g *hidlGenRule) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 
 	var fullRootOptions []string
+	var currentPaths android.Paths
 	ctx.VisitDirectDeps(func(dep android.Module) {
-		fullRootOptions = append(fullRootOptions, dep.(*hidlInterface).properties.Full_root_option)
+		switch t := dep.(type) {
+		case *hidlInterface:
+			fullRootOptions = append(fullRootOptions, t.properties.Full_root_option)
+		case *hidlPackageRoot:
+			currentPaths = append(currentPaths, t.getCurrentPaths()...)
+		default:
+			panic(fmt.Sprintf("Unrecognized hidlGenProperties dependency: %T", t))
+		}
 	})
+
+	if len(currentPaths) > 1 {
+		panic(fmt.Sprintf("Expecting one or zero current paths, but found: %v", currentPaths))
+	}
 
 	fullRootOptions = android.FirstUniqueStrings(fullRootOptions)
 
 	ctx.ModuleBuild(pctx, android.ModuleBuildParams{
 		Rule:            hidlRule,
-		Inputs:          g.genInputs,
+		Inputs:          append(g.genInputs, currentPaths...),
 		Output:          g.genOutputs[0],
 		ImplicitOutputs: g.genOutputs[1:],
 		Args: map[string]string{
@@ -118,6 +132,7 @@ func (g *hidlGenRule) GeneratedHeaderDirs() android.Paths {
 func (g *hidlGenRule) DepsMutator(ctx android.BottomUpMutatorContext) {
 	ctx.AddDependency(ctx.Module(), nil, g.properties.FqName+hidlInterfaceSuffix)
 	ctx.AddDependency(ctx.Module(), nil, wrap("", g.properties.Interfaces, hidlInterfaceSuffix)...)
+	ctx.AddDependency(ctx.Module(), nil, g.properties.Root)
 }
 
 func hidlGenFactory() android.Module {
@@ -130,9 +145,6 @@ func hidlGenFactory() android.Module {
 type hidlInterfaceProperties struct {
 	// Vndk properties for interface library only.
 	cc.VndkProperties
-
-	// The owner of the module
-	Owner *string
 
 	// List of .hal files which compose this interface.
 	Srcs []string
@@ -158,10 +170,45 @@ type hidlInterfaceProperties struct {
 	Full_root_option string `blueprint:"mutated"`
 }
 
+// TODO(b/119771576): These properties are shared by all Android modules, and we are specifically
+// calling these out to be copied to every create module. However, if a new property is added, it
+// could break things because this code has no way to know about that.
+type manuallyInheritCommonProperties struct {
+	Enabled          *bool
+	Compile_multilib *string
+	Target           struct {
+		Host struct {
+			Compile_multilib *string
+		}
+		Android struct {
+			Compile_multilib *string
+		}
+	}
+	Proprietary               *bool
+	Owner                     *string
+	Vendor                    *bool
+	Soc_specific              *bool
+	Device_specific           *bool
+	Product_specific          *bool
+	Product_services_specific *bool
+	Recovery                  *bool
+	Init_rc                   []string
+	Vintf_fragments           []string
+	Required                  []string
+	Notice                    *string
+	Dist                      struct {
+		Targets []string
+		Dest    *string
+		Dir     *string
+		Suffix  *string
+	}
+}
+
 type hidlInterface struct {
 	android.ModuleBase
 
-	properties hidlInterfaceProperties
+	properties              hidlInterfaceProperties
+	inheritCommonProperties manuallyInheritCommonProperties
 }
 
 func processSources(mctx android.LoadHookContext, srcs []string) ([]string, []string, bool) {
@@ -271,25 +318,26 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 
 	// TODO(b/69002743): remove filegroups
 	mctx.CreateModule(android.ModuleFactoryAdaptor(android.FileGroupFactory), &fileGroupProperties{
-		Name:  proptools.StringPtr(name.fileGroupName()),
-		Owner: i.properties.Owner,
-		Srcs:  i.properties.Srcs,
-	})
+		Name: proptools.StringPtr(name.fileGroupName()),
+		Srcs: i.properties.Srcs,
+	}, &i.inheritCommonProperties)
 
 	mctx.CreateModule(android.ModuleFactoryAdaptor(hidlGenFactory), &nameProperties{
 		Name: proptools.StringPtr(name.sourcesName()),
 	}, &hidlGenProperties{
 		Language:   "c++-sources",
 		FqName:     name.string(),
+		Root:       i.properties.Root,
 		Interfaces: i.properties.Interfaces,
 		Inputs:     i.properties.Srcs,
 		Outputs:    concat(wrap(name.dir(), interfaces, "All.cpp"), wrap(name.dir(), types, ".cpp")),
-	})
+	}, &i.inheritCommonProperties)
 	mctx.CreateModule(android.ModuleFactoryAdaptor(hidlGenFactory), &nameProperties{
 		Name: proptools.StringPtr(name.headersName()),
 	}, &hidlGenProperties{
 		Language:   "c++-headers",
 		FqName:     name.string(),
+		Root:       i.properties.Root,
 		Interfaces: i.properties.Interfaces,
 		Inputs:     i.properties.Srcs,
 		Outputs: concat(wrap(name.dir()+"I", interfaces, ".h"),
@@ -299,12 +347,11 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 			wrap(name.dir()+"IHw", interfaces, ".h"),
 			wrap(name.dir(), types, ".h"),
 			wrap(name.dir()+"hw", types, ".h")),
-	})
+	}, &i.inheritCommonProperties)
 
 	if shouldGenerateLibrary {
 		mctx.CreateModule(android.ModuleFactoryAdaptor(cc.LibraryFactory), &ccProperties{
 			Name:               proptools.StringPtr(name.string()),
-			Owner:              i.properties.Owner,
 			Recovery_available: proptools.BoolPtr(true),
 			Vendor_available:   proptools.BoolPtr(true),
 			Double_loadable:    proptools.BoolPtr(isDoubleLoadable(name.string())),
@@ -326,7 +373,7 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 				"libutils",
 			}),
 			Export_generated_headers: []string{name.headersName()},
-		}, &i.properties.VndkProperties)
+		}, &i.properties.VndkProperties, &i.inheritCommonProperties)
 	}
 
 	if shouldGenerateJava {
@@ -335,14 +382,14 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 		}, &hidlGenProperties{
 			Language:   "java",
 			FqName:     name.string(),
+			Root:       i.properties.Root,
 			Interfaces: i.properties.Interfaces,
 			Inputs:     i.properties.Srcs,
 			Outputs: concat(wrap(name.sanitizedDir()+"I", interfaces, ".java"),
 				wrap(name.sanitizedDir(), i.properties.Types, ".java")),
-		})
+		}, &i.inheritCommonProperties)
 		mctx.CreateModule(android.ModuleFactoryAdaptor(java.LibraryFactory), &javaProperties{
 			Name:              proptools.StringPtr(name.javaName()),
-			Owner:             i.properties.Owner,
 			Defaults:          []string{"hidl-java-module-defaults"},
 			No_framework_libs: proptools.BoolPtr(true),
 			Installable:       proptools.BoolPtr(true),
@@ -355,7 +402,7 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 			// not depend on framework.
 			Sdk_version: proptools.StringPtr("core_current"),
 			Libs:        []string{"hwbinder.stubs"},
-		})
+		}, &i.inheritCommonProperties)
 	}
 
 	if shouldGenerateJavaConstants {
@@ -364,17 +411,17 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 		}, &hidlGenProperties{
 			Language:   "java-constants",
 			FqName:     name.string(),
+			Root:       i.properties.Root,
 			Interfaces: i.properties.Interfaces,
 			Inputs:     i.properties.Srcs,
 			Outputs:    []string{name.sanitizedDir() + "Constants.java"},
-		})
+		}, &i.inheritCommonProperties)
 		mctx.CreateModule(android.ModuleFactoryAdaptor(java.LibraryFactory), &javaProperties{
 			Name:              proptools.StringPtr(name.javaConstantsName()),
-			Owner:             i.properties.Owner,
 			Defaults:          []string{"hidl-java-module-defaults"},
 			No_framework_libs: proptools.BoolPtr(true),
 			Srcs:              []string{":" + name.javaConstantsSourcesName()},
-		})
+		}, &i.inheritCommonProperties)
 	}
 
 	mctx.CreateModule(android.ModuleFactoryAdaptor(hidlGenFactory), &nameProperties{
@@ -382,23 +429,24 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 	}, &hidlGenProperties{
 		Language:   "c++-adapter-sources",
 		FqName:     name.string(),
+		Root:       i.properties.Root,
 		Interfaces: i.properties.Interfaces,
 		Inputs:     i.properties.Srcs,
 		Outputs:    wrap(name.dir()+"A", concat(interfaces, types), ".cpp"),
-	})
+	}, &i.inheritCommonProperties)
 	mctx.CreateModule(android.ModuleFactoryAdaptor(hidlGenFactory), &nameProperties{
 		Name: proptools.StringPtr(name.adapterHelperHeadersName()),
 	}, &hidlGenProperties{
 		Language:   "c++-adapter-headers",
 		FqName:     name.string(),
+		Root:       i.properties.Root,
 		Interfaces: i.properties.Interfaces,
 		Inputs:     i.properties.Srcs,
 		Outputs:    wrap(name.dir()+"A", concat(interfaces, types), ".h"),
-	})
+	}, &i.inheritCommonProperties)
 
 	mctx.CreateModule(android.ModuleFactoryAdaptor(cc.LibraryFactory), &ccProperties{
 		Name:              proptools.StringPtr(name.adapterHelperName()),
-		Owner:             i.properties.Owner,
 		Vendor_available:  proptools.BoolPtr(true),
 		Defaults:          []string{"hidl-module-defaults"},
 		Generated_sources: []string{name.adapterHelperSourcesName()},
@@ -424,19 +472,19 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 		}, wrap("", dependencies, "-adapter-helper"), cppDependencies, libraryIfExists),
 		Export_generated_headers: []string{name.adapterHelperHeadersName()},
 		Group_static_libs:        proptools.BoolPtr(true),
-	})
+	}, &i.inheritCommonProperties)
 	mctx.CreateModule(android.ModuleFactoryAdaptor(hidlGenFactory), &nameProperties{
 		Name: proptools.StringPtr(name.adapterSourcesName()),
 	}, &hidlGenProperties{
 		Language:   "c++-adapter-main",
 		FqName:     name.string(),
+		Root:       i.properties.Root,
 		Interfaces: i.properties.Interfaces,
 		Inputs:     i.properties.Srcs,
 		Outputs:    []string{"main.cpp"},
-	})
+	}, &i.inheritCommonProperties)
 	mctx.CreateModule(android.ModuleFactoryAdaptor(cc.TestFactory), &ccProperties{
 		Name:              proptools.StringPtr(name.adapterName()),
-		Owner:             i.properties.Owner,
 		Generated_sources: []string{name.adapterSourcesName()},
 		Shared_libs: []string{
 			"libbase",
@@ -452,7 +500,7 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 			name.adapterHelperName(),
 		}, wrap("", dependencies, "-adapter-helper"), cppDependencies, libraryIfExists),
 		Group_static_libs: proptools.BoolPtr(true),
-	})
+	}, &i.inheritCommonProperties)
 }
 
 func (h *hidlInterface) Name() string {
@@ -465,7 +513,7 @@ func (h *hidlInterface) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 			panic("internal error, multiple dependencies found but only one added")
 		}
 		visited = true
-		h.properties.Full_root_option = dep.(*hidlPackageRoot).properties.Full_root_option
+		h.properties.Full_root_option = dep.(*hidlPackageRoot).getFullPackageRoot()
 	})
 	if !visited {
 		panic("internal error, no dependencies found but dependency added")
@@ -479,6 +527,7 @@ func (h *hidlInterface) DepsMutator(ctx android.BottomUpMutatorContext) {
 func hidlInterfaceFactory() android.Module {
 	i := &hidlInterface{}
 	i.AddProperties(&i.properties)
+	i.AddProperties(&i.inheritCommonProperties)
 	android.InitAndroidModule(i)
 	android.AddLoadHook(i, func(ctx android.LoadHookContext) { hidlInterfaceMutator(ctx, i) })
 

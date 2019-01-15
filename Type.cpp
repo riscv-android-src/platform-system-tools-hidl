@@ -64,10 +64,6 @@ bool Type::isTypeDef() const {
     return false;
 }
 
-bool Type::isBinder() const {
-    return false;
-}
-
 bool Type::isNamedType() const {
     return false;
 }
@@ -158,9 +154,10 @@ std::vector<const Reference<Type>*> Type::getStrongReferences() const {
     return ret;
 }
 
-status_t Type::recursivePass(const std::function<status_t(Type*)>& func,
+status_t Type::recursivePass(ParseStage stage, const std::function<status_t(Type*)>& func,
                              std::unordered_set<const Type*>* visited) {
-    if (mIsPostParseCompleted) return OK;
+    if (mParseStage > stage) return OK;
+    if (mParseStage < stage) return UNKNOWN_ERROR;
 
     if (visited->find(this) != visited->end()) return OK;
     visited->insert(this);
@@ -169,21 +166,22 @@ status_t Type::recursivePass(const std::function<status_t(Type*)>& func,
     if (err != OK) return err;
 
     for (auto* nextType : getDefinedTypes()) {
-        err = nextType->recursivePass(func, visited);
+        err = nextType->recursivePass(stage, func, visited);
         if (err != OK) return err;
     }
 
     for (auto* nextRef : getReferences()) {
-        err = nextRef->shallowGet()->recursivePass(func, visited);
+        err = nextRef->shallowGet()->recursivePass(stage, func, visited);
         if (err != OK) return err;
     }
 
     return OK;
 }
 
-status_t Type::recursivePass(const std::function<status_t(const Type*)>& func,
+status_t Type::recursivePass(ParseStage stage, const std::function<status_t(const Type*)>& func,
                              std::unordered_set<const Type*>* visited) const {
-    if (mIsPostParseCompleted) return OK;
+    if (mParseStage > stage) return OK;
+    if (mParseStage < stage) return UNKNOWN_ERROR;
 
     if (visited->find(this) != visited->end()) return OK;
     visited->insert(this);
@@ -192,12 +190,12 @@ status_t Type::recursivePass(const std::function<status_t(const Type*)>& func,
     if (err != OK) return err;
 
     for (const auto* nextType : getDefinedTypes()) {
-        err = nextType->recursivePass(func, visited);
+        err = nextType->recursivePass(stage, func, visited);
         if (err != OK) return err;
     }
 
     for (const auto* nextRef : getReferences()) {
-        err = nextRef->shallowGet()->recursivePass(func, visited);
+        err = nextRef->shallowGet()->recursivePass(stage, func, visited);
         if (err != OK) return err;
     }
 
@@ -354,9 +352,13 @@ bool Type::deepCanCheckEquality(std::unordered_set<const Type*>* /* visited */) 
     return false;
 }
 
-void Type::setPostParseCompleted() {
-    CHECK(!mIsPostParseCompleted);
-    mIsPostParseCompleted = true;
+Type::ParseStage Type::getParseStage() const {
+    return mParseStage;
+}
+
+void Type::setParseStage(ParseStage stage) {
+    CHECK(mParseStage < stage);
+    mParseStage = stage;
 }
 
 Scope* Type::parent() {
@@ -368,7 +370,7 @@ const Scope* Type::parent() const {
 }
 
 std::string Type::getCppType(StorageMode, bool) const {
-    CHECK(!"Should not be here");
+    CHECK(!"Should not be here") << typeName();
     return std::string();
 }
 
@@ -378,7 +380,7 @@ std::string Type::decorateCppName(
 }
 
 std::string Type::getJavaType(bool /* forInitializer */) const {
-    CHECK(!"Should not be here");
+    CHECK(!"Should not be here") << typeName();
     return std::string();
 }
 
@@ -391,17 +393,17 @@ std::string Type::getJavaTypeCast(const std::string& objName) const {
 }
 
 std::string Type::getJavaSuffix() const {
-    CHECK(!"Should not be here");
+    CHECK(!"Should not be here") << typeName();
     return std::string();
 }
 
 std::string Type::getVtsType() const {
-    CHECK(!"Should not be here");
+    CHECK(!"Should not be here") << typeName();
     return std::string();
 }
 
 std::string Type::getVtsValueName() const {
-    CHECK(!"Should not be here");
+    CHECK(!"Should not be here") << typeName();
     return std::string();
 }
 
@@ -412,7 +414,7 @@ void Type::emitReaderWriter(
         bool,
         bool,
         ErrorMode) const {
-    CHECK(!"Should not be here");
+    CHECK(!"Should not be here") << typeName();
 }
 
 void Type::emitResolveReferences(
@@ -423,7 +425,7 @@ void Type::emitResolveReferences(
         bool,
         bool,
         ErrorMode) const {
-    CHECK(!"Should not be here");
+    CHECK(!"Should not be here") << typeName();
 }
 
 void Type::emitResolveReferencesEmbedded(
@@ -438,7 +440,7 @@ void Type::emitResolveReferencesEmbedded(
         ErrorMode,
         const std::string &,
         const std::string &) const {
-    CHECK(!"Should not be here");
+    CHECK(!"Should not be here") << typeName();
 }
 
 void Type::emitDump(
@@ -484,7 +486,7 @@ void Type::emitReaderWriterEmbedded(
         ErrorMode,
         const std::string &,
         const std::string &) const {
-    CHECK(!"Should not be here");
+    CHECK(!"Should not be here") << typeName();
 }
 
 void Type::emitJavaReaderWriter(
@@ -520,7 +522,7 @@ void Type::emitJavaFieldReaderWriter(
         const std::string &,
         const std::string &,
         bool) const {
-    CHECK(!"Should not be here");
+    CHECK(!"Should not be here") << typeName();
 }
 
 void Type::handleError(Formatter &out, ErrorMode mode) const {
@@ -622,6 +624,8 @@ void Type::emitTypeForwardDeclaration(Formatter&) const {}
 void Type::emitGlobalTypeDeclarations(Formatter&) const {}
 
 void Type::emitPackageTypeDeclarations(Formatter&) const {}
+
+void Type::emitPackageTypeHeaderDefinitions(Formatter&) const {}
 
 void Type::emitPackageHwDeclarations(Formatter&) const {}
 

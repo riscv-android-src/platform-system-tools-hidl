@@ -171,6 +171,22 @@ TEST_F(HidlTest, BazSomeOtherBaseMethodTest) {
                }));
 }
 
+TEST_F(HidlTest, SomeOtherBaseMethodInvalidString) {
+    IBase::Foo foo {
+        .y = {
+            .s = "\xff",
+        }
+    };
+
+    auto ret = baz->someOtherBaseMethod(foo, [&](const auto&) {
+        ADD_FAILURE() << "Should not accept invalid UTF-8 String";
+    });
+
+    EXPECT_FALSE(ret.isOk());
+
+    EXPECT_OK(baz->ping());
+}
+
 TEST_F(HidlTest, BazSomeMethodWithFooArraysTest) {
     hidl_array<IBase::Foo, 2> foo;
 
@@ -423,7 +439,7 @@ TEST_F(HidlTest, BazDoThatAndReturnSomethingMethodTest) {
 }
 
 TEST_F(HidlTest, BazDoQuiteABitMethodTest) {
-    auto result = baz->doQuiteABit(1, 2ll, 3.0f, 4.0);
+    auto result = baz->doQuiteABit(1, 2LL, 3.0f, 4.0);
 
     EXPECT_OK(result);
     EXPECT_EQ(result, 666.5);
@@ -618,7 +634,7 @@ TEST_F(HidlTest, BazTestDoubleVecs) {
 
 TEST_F(HidlTest, SafeUnionNoInitTest) {
     EXPECT_OK(safeunionInterface->newLargeSafeUnion([&](const LargeSafeUnion& safeUnion) {
-        EXPECT_EQ(LargeSafeUnion::hidl_discriminator::hidl_no_init, safeUnion.getDiscriminator());
+        EXPECT_EQ(LargeSafeUnion::hidl_discriminator::noinit, safeUnion.getDiscriminator());
     }));
 }
 
@@ -736,7 +752,7 @@ TEST_F(HidlTest, SafeUnionInterfaceTest) {
 
     EXPECT_OK(
         safeunionInterface->newInterfaceTypeSafeUnion([&](const InterfaceTypeSafeUnion& safeUnion) {
-            EXPECT_EQ(InterfaceTypeSafeUnion::hidl_discriminator::hidl_no_init,
+            EXPECT_EQ(InterfaceTypeSafeUnion::hidl_discriminator::noinit,
                       safeUnion.getDiscriminator());
 
             EXPECT_OK(safeunionInterface->setInterfaceB(
@@ -973,8 +989,8 @@ TEST_F(HidlTest, SafeUnionHandleWithMultipleFdsTest) {
 TEST_F(HidlTest, SafeUnionEqualityTest) {
     EXPECT_OK(safeunionInterface->newLargeSafeUnion([&](const LargeSafeUnion& one) {
         EXPECT_OK(safeunionInterface->newLargeSafeUnion([&](const LargeSafeUnion& two) {
-            EXPECT_FALSE(one == two);
-            EXPECT_TRUE(one != two);
+            EXPECT_TRUE(one == two);
+            EXPECT_FALSE(one != two);
         }));
 
         EXPECT_OK(safeunionInterface->setA(one, 1, [&](const LargeSafeUnion& one) {

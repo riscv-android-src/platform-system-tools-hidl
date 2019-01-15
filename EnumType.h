@@ -39,6 +39,9 @@ struct EnumType : public Scope {
 
     void forEachValueFromRoot(const std::function<void(EnumValue*)> f) const;
 
+    // This is the number of distinct keys (even if they have colliding values)
+    size_t numValueNames() const;
+
     LocalIdentifier *lookupIdentifier(const std::string &name) const override;
 
     bool isElidableType() const override;
@@ -93,6 +96,7 @@ struct EnumType : public Scope {
     void emitTypeForwardDeclaration(Formatter& out) const override;
     void emitGlobalTypeDeclarations(Formatter& out) const override;
     void emitPackageTypeDeclarations(Formatter& out) const override;
+    void emitPackageTypeHeaderDefinitions(Formatter& out) const override;
 
     void emitJavaTypeDeclarations(Formatter& out, bool atTopLevel) const override;
 

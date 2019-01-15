@@ -233,8 +233,7 @@ public final class HidlTestJava {
         {
             // SafeUnionNoInitTest
             LargeSafeUnion safeUnion = safeunionInterface.newLargeSafeUnion();
-            ExpectTrue(
-                safeUnion.getDiscriminator() == LargeSafeUnion.hidl_discriminator.hidl_no_init);
+            ExpectTrue(safeUnion.getDiscriminator() == LargeSafeUnion.hidl_discriminator.noinit);
         }
         {
             // SafeUnionSimpleTest
@@ -282,6 +281,20 @@ public final class HidlTestJava {
             ExpectTrue(safeUnion.getDiscriminator() == LargeSafeUnion.hidl_discriminator.l);
             ExpectTrue(safeUnion.l().getDiscriminator() == SmallSafeUnion.hidl_discriminator.a);
             ExpectTrue(safeUnion.l().a() == (byte) 1);
+        }
+        {
+            // SafeUnionEnumTest
+            LargeSafeUnion safeUnion = safeunionInterface.newLargeSafeUnion();
+            safeUnion = safeunionInterface.setM(safeUnion, ISafeUnion.BitField.V1);
+            ExpectTrue(safeUnion.getDiscriminator() == LargeSafeUnion.hidl_discriminator.m);
+            ExpectTrue(safeUnion.m() == ISafeUnion.BitField.V1);
+        }
+        {
+            // SafeUnionBitFieldTest
+            LargeSafeUnion safeUnion = safeunionInterface.newLargeSafeUnion();
+            safeUnion = safeunionInterface.setN(safeUnion, ISafeUnion.BitField.V1);
+            ExpectTrue(safeUnion.getDiscriminator() == LargeSafeUnion.hidl_discriminator.n);
+            ExpectTrue(safeUnion.n() == ISafeUnion.BitField.V1);
         }
         {
             // SafeUnionInterfaceNullNativeHandleTest
@@ -430,7 +443,7 @@ public final class HidlTestJava {
             // SafeUnionEqualityTest
             LargeSafeUnion one = safeunionInterface.newLargeSafeUnion();
             LargeSafeUnion two = safeunionInterface.newLargeSafeUnion();
-            ExpectFalse(one.equals(two));
+            ExpectTrue(one.equals(two));
 
             one = safeunionInterface.setA(one, (byte) 1);
             ExpectFalse(one.equals(two));
@@ -967,7 +980,7 @@ public final class HidlTestJava {
             ArrayList<byte[]> in = new ArrayList<byte[]>();
 
             int k = 0;
-            for (int i = 0; i < in.size(); ++i) {
+            for (int i = 0; i < 8; ++i) {
                 byte[] elem = new byte[128];
                 for (int j = 0; j < 128; ++j, ++k) {
                     elem[j] = (byte)k;
@@ -976,7 +989,34 @@ public final class HidlTestJava {
             }
 
             ArrayList<byte[]> out = proxy.testByteVecs(in);
-            ExpectTrue(in.equals(out));
+
+            ExpectDeepEq(in, out);
+        }
+
+        {
+            // testByteVecs w/ mismatched element lengths.
+
+            ArrayList<byte[]> in = new ArrayList<byte[]>();
+
+            int k = 0;
+            for (int i = 0; i < 8; ++i) {
+                byte[] elem = new byte[128 - i];
+                for (int j = 0; j < (128 - i); ++j, ++k) {
+                    elem[j] = (byte)k;
+                }
+                in.add(elem);
+            }
+
+            boolean failedAsItShould = false;
+
+            try {
+                ArrayList<byte[]> out = proxy.testByteVecs(in);
+            }
+            catch (IllegalArgumentException e) {
+                failedAsItShould = true;
+            }
+
+            ExpectTrue(failedAsItShould);
         }
 
         {
@@ -985,7 +1025,7 @@ public final class HidlTestJava {
             ArrayList<boolean[]> in = new ArrayList<boolean[]>();
 
             int k = 0;
-            for (int i = 0; i < in.size(); ++i) {
+            for (int i = 0; i < 8; ++i) {
                 boolean[] elem = new boolean[128];
                 for (int j = 0; j < 128; ++j, ++k) {
                     elem[j] = (k & 4) != 0;
@@ -994,7 +1034,7 @@ public final class HidlTestJava {
             }
 
             ArrayList<boolean[]> out = proxy.testBooleanVecs(in);
-            ExpectTrue(in.equals(out));
+            ExpectDeepEq(in, out);
         }
 
         {
@@ -1003,7 +1043,7 @@ public final class HidlTestJava {
             ArrayList<double[]> in = new ArrayList<double[]>();
 
             int k = 0;
-            for (int i = 0; i < in.size(); ++i) {
+            for (int i = 0; i < 8; ++i) {
                 double[] elem = new double[128];
                 for (int j = 0; j < 128; ++j, ++k) {
                     elem[j] = k;
@@ -1012,7 +1052,7 @@ public final class HidlTestJava {
             }
 
             ArrayList<double[]> out = proxy.testDoubleVecs(in);
-            ExpectTrue(in.equals(out));
+            ExpectDeepEq(in, out);
         }
         {
             // testProxyEquals
@@ -1454,6 +1494,22 @@ public final class HidlTestJava {
         public LargeSafeUnion setL(LargeSafeUnion safeUnion, SmallSafeUnion l) {
             Log.d(TAG, "SERVER: setL(" + l + ")");
             safeUnion.l(l);
+
+            return safeUnion;
+        }
+
+        @Override
+        public LargeSafeUnion setM(LargeSafeUnion safeUnion, byte m) {
+            Log.d(TAG, "SERVER: setM(" + m + ")");
+            safeUnion.m(m);
+
+            return safeUnion;
+        }
+
+        @Override
+        public LargeSafeUnion setN(LargeSafeUnion safeUnion, byte n) {
+            Log.d(TAG, "SERVER: setN(" + n + ")");
+            safeUnion.n(n);
 
             return safeUnion;
         }
