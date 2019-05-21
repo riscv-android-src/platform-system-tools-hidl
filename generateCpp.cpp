@@ -476,10 +476,6 @@ void AST::generatePassthroughMethod(Formatter& out, const Method* method, const 
     const bool returnsValue = !method->results().empty();
     const NamedReference<Type>* elidedReturn = method->canElideCallback();
 
-    if (returnsValue && elidedReturn == nullptr) {
-        generateCheckNonNull(out, "_hidl_cb");
-    }
-
     generateCppInstrumentationCall(
             out,
             InstrumentationEvent::PASSTHROUGH_ENTRY,
@@ -953,16 +949,6 @@ void AST::generateCppSource(Formatter& out) const {
     enterLeaveNamespace(out, false /* enter */);
 }
 
-void AST::generateCheckNonNull(Formatter &out, const std::string &nonNull) {
-    out.sIf(nonNull + " == nullptr", [&] {
-        out << "return ::android::hardware::Status::fromExceptionCode(\n";
-        out.indent(2, [&] {
-            out << "::android::hardware::Status::EX_ILLEGAL_ARGUMENT,\n"
-                << "\"Null synchronous callback passed.\");\n";
-        });
-    }).endl().endl();
-}
-
 void AST::generateTypeSource(Formatter& out, const std::string& ifaceName) const {
     mRootScope.emitTypeDefinitions(out, ifaceName);
 }
@@ -1097,9 +1083,7 @@ void AST::generateStaticProxyMethodSource(Formatter& out, const std::string& kla
 
     const bool returnsValue = !method->results().empty();
     const NamedReference<Type>* elidedReturn = method->canElideCallback();
-    if (returnsValue && elidedReturn == nullptr) {
-        generateCheckNonNull(out, "_hidl_cb");
-    }
+    const bool hasCallback = returnsValue && elidedReturn == nullptr;
 
     generateCppInstrumentationCall(
             out,
@@ -1110,10 +1094,13 @@ void AST::generateStaticProxyMethodSource(Formatter& out, const std::string& kla
     out << "::android::hardware::Parcel _hidl_data;\n";
     out << "::android::hardware::Parcel _hidl_reply;\n";
     out << "::android::status_t _hidl_err;\n";
+    out << "::android::status_t _hidl_transact_err;\n";
     out << "::android::hardware::Status _hidl_status;\n\n";
 
-    declareCppReaderLocals(
-            out, method->results(), true /* forResults */);
+    if (!hasCallback) {
+        declareCppReaderLocals(
+                out, method->results(), true /* forResults */);
+    }
 
     out << "_hidl_err = _hidl_data.writeInterfaceToken(";
     out << klassName;
@@ -1152,7 +1139,7 @@ void AST::generateStaticProxyMethodSource(Formatter& out, const std::string& kla
         // Start binder threadpool to handle incoming transactions
         out << "::android::hardware::ProcessState::self()->startThreadPool();\n";
     }
-    out << "_hidl_err = ::android::hardware::IInterface::asBinder(_hidl_this)->transact("
+    out << "_hidl_transact_err = ::android::hardware::IInterface::asBinder(_hidl_this)->transact("
         << method->getSerialId()
         << " /* "
         << method->name()
@@ -1160,16 +1147,36 @@ void AST::generateStaticProxyMethodSource(Formatter& out, const std::string& kla
 
     if (method->isOneway()) {
         out << ", " << Interface::FLAG_ONE_WAY->cppValue();
+    } else {
+        out << ", 0";
     }
-    out << ");\n";
 
-    out << "if (_hidl_err != ::android::OK) { goto _hidl_error; }\n\n";
+    if (hasCallback) {
+        out << ", [&] (::android::hardware::Parcel& _hidl_reply) {\n";
+        out.indent();
+        declareCppReaderLocals(
+                out, method->results(), true /* forResults */);
+        out.endl();
+    } else {
+        out << ");\n";
+        out << "if (_hidl_transact_err != ::android::OK) \n";
+        out.block([&] {
+            out << "_hidl_err = _hidl_transact_err;\n";
+            out << "goto _hidl_error;\n";
+        }).endl().endl();
+    }
 
     if (!method->isOneway()) {
-        out << "_hidl_err = ::android::hardware::readFromParcel(&_hidl_status, _hidl_reply);\n";
-        out << "if (_hidl_err != ::android::OK) { goto _hidl_error; }\n\n";
-        out << "if (!_hidl_status.isOk()) { return _hidl_status; }\n\n";
+        Type::ErrorMode errorMode = hasCallback ? Type::ErrorMode_ReturnNothing : Type::ErrorMode_Goto;
 
+        out << "_hidl_err = ::android::hardware::readFromParcel(&_hidl_status, _hidl_reply);\n";
+        Type::handleError(out, errorMode);
+
+        if (hasCallback) {
+            out << "if (!_hidl_status.isOk()) { return; }\n\n";
+        } else {
+            out << "if (!_hidl_status.isOk()) { return _hidl_status; }\n\n";
+        }
 
         // First DFS: write all buffers and resolve pointers for parent
         for (const auto &arg : method->results()) {
@@ -1179,7 +1186,7 @@ void AST::generateStaticProxyMethodSource(Formatter& out, const std::string& kla
                     false /* parcelObjIsPointer */,
                     arg,
                     true /* reader */,
-                    Type::ErrorMode_Goto,
+                    errorMode,
                     true /* addPrefixToName */);
         }
 
@@ -1191,7 +1198,7 @@ void AST::generateStaticProxyMethodSource(Formatter& out, const std::string& kla
                     false /* parcelObjIsPointer */,
                     arg,
                     true /* reader */,
-                    Type::ErrorMode_Goto,
+                    errorMode,
                     true /* addPrefixToName */);
         }
 
@@ -1215,13 +1222,22 @@ void AST::generateStaticProxyMethodSource(Formatter& out, const std::string& kla
             method,
             superInterface);
 
+    if (hasCallback) {
+        out.unindent();
+        out << "});\n";
+        out << "if (_hidl_transact_err != ::android::OK) ";
+        out.block([&] {
+            out << "_hidl_err = _hidl_transact_err;\n";
+            out << "goto _hidl_error;\n";
+        }).endl().endl();
+        out << "if (!_hidl_status.isOk()) { return _hidl_status; }\n";
+    }
+
     if (elidedReturn != nullptr) {
-        out << "_hidl_status.setFromStatusT(_hidl_err);\n";
         out << "return ::android::hardware::Return<";
         out << elidedReturn->type().getCppResultType()
             << ">(_hidl_out_" << elidedReturn->name() << ");\n\n";
     } else {
-        out << "_hidl_status.setFromStatusT(_hidl_err);\n";
         out << "return ::android::hardware::Return<void>();\n\n";
     }
 
@@ -1303,11 +1319,12 @@ void AST::generateStubSource(Formatter& out, const Interface* iface) const {
         << "\") { \n";
     out.indent();
     out << "_hidl_mImpl = _hidl_impl;\n";
-    out << "auto prio = ::android::hardware::details::gServicePrioMap.get("
+    out << "auto prio = ::android::hardware::details::gServicePrioMap->get("
         << "_hidl_impl, {SCHED_NORMAL, 0});\n";
     out << "mSchedPolicy = prio.sched_policy;\n";
     out << "mSchedPriority = prio.prio;\n";
-    out << "setRequestingSid(::android::hardware::details::gServiceSidMap.get(_hidl_impl, false));\n";
+    out << "setRequestingSid(::android::hardware::details::gServiceSidMap->get(_hidl_impl, "
+           "false));\n";
     out.unindent();
 
     out.unindent();
@@ -1340,8 +1357,10 @@ void AST::generateStubSource(Formatter& out, const Interface* iface) const {
 
     out << klassName << "::~" << klassName << "() ";
     out.block([&]() {
-        out << "::android::hardware::details::gBnMap.eraseIfEqual(_hidl_mImpl.get(), this);\n";
-    }).endl().endl();
+           out << "::android::hardware::details::gBnMap->eraseIfEqual(_hidl_mImpl.get(), this);\n";
+       })
+            .endl()
+            .endl();
 
     generateMethods(out,
                     [&](const Method* method, const Interface* superInterface) {
