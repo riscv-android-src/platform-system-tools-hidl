@@ -20,6 +20,7 @@
 #include "EnumType.h"
 #include "HidlTypeAssertion.h"
 #include "Interface.h"
+#include "Location.h"
 #include "Method.h"
 #include "Reference.h"
 #include "ScalarType.h"
@@ -87,11 +88,7 @@ void AST::enterLeaveNamespace(Formatter &out, bool enter) const {
         for (const auto &component : packageComponents) {
             out << "namespace " << component << " {\n";
         }
-
-        out.setNamespace(mPackage.cppNamespace() + "::");
     } else {
-        out.setNamespace(std::string());
-
         for (auto it = packageComponents.rbegin();
                 it != packageComponents.rend();
                 ++it) {
@@ -111,7 +108,8 @@ static void declareGetService(Formatter &out, const std::string &interfaceName, 
                 "during device boot. If getStub is true, this will try to return an unwrapped\n"
                 "passthrough implementation in the same process. This is useful when getting an\n"
                 "implementation from the same partition/compilation group.\n\n"
-                "In general, prefer getService(std::string,bool)")
+                "In general, prefer getService(std::string,bool)",
+                HIDL_LOCATION_HERE)
                 .emit(out);
     } else {
         DocComment(
@@ -121,24 +119,29 @@ static void declareGetService(Formatter &out, const std::string &interfaceName, 
                 "become available. If the service is a lazy service, this will start the service\n"
                 "and return when it becomes available. If getStub is true, this will try to\n"
                 "return an unwrapped passthrough implementation in the same process. This is\n"
-                "useful when getting an implementation from the same partition/compilation group.")
+                "useful when getting an implementation from the same partition/compilation group.",
+                HIDL_LOCATION_HERE)
                 .emit(out);
     }
     out << "static ::android::sp<" << interfaceName << "> " << functionName << "("
         << "const std::string &serviceName=\"default\", bool getStub=false);\n";
-    DocComment("Deprecated. See " + functionName + "(std::string, bool)").emit(out);
+    DocComment("Deprecated. See " + functionName + "(std::string, bool)", HIDL_LOCATION_HERE)
+            .emit(out);
     out << "static ::android::sp<" << interfaceName << "> " << functionName << "("
         << "const char serviceName[], bool getStub=false)"
         << "  { std::string str(serviceName ? serviceName : \"\");"
         << "      return " << functionName << "(str, getStub); }\n";
-    DocComment("Deprecated. See " + functionName + "(std::string, bool)").emit(out);
+    DocComment("Deprecated. See " + functionName + "(std::string, bool)", HIDL_LOCATION_HERE)
+            .emit(out);
     out << "static ::android::sp<" << interfaceName << "> " << functionName << "("
         << "const ::android::hardware::hidl_string& serviceName, bool getStub=false)"
         // without c_str the std::string constructor is ambiguous
         << "  { std::string str(serviceName.c_str());"
         << "      return " << functionName << "(str, getStub); }\n";
     DocComment("Calls " + functionName +
-               "(\"default\", bool). This is the recommended instance name for singleton services.")
+                       "(\"default\", bool). This is the recommended instance name for singleton "
+                       "services.",
+               HIDL_LOCATION_HERE)
             .emit(out);
     out << "static ::android::sp<" << interfaceName << "> " << functionName << "("
         << "bool getStub) { return " << functionName << "(\"default\", getStub); }\n";
@@ -150,11 +153,13 @@ static void declareServiceManagerInteractions(Formatter &out, const std::string 
 
     DocComment(
             "Registers a service with the service manager. For Trebilized devices, the service\n"
-            "must also be in the VINTF manifest.")
+            "must also be in the VINTF manifest.",
+            HIDL_LOCATION_HERE)
             .emit(out);
     out << "__attribute__ ((warn_unused_result))"
         << "::android::status_t registerAsService(const std::string &serviceName=\"default\");\n";
-    DocComment("Registers for notifications for when a service is registered.").emit(out);
+    DocComment("Registers for notifications for when a service is registered.", HIDL_LOCATION_HERE)
+            .emit(out);
     out << "static bool registerForNotifications(\n";
     out.indent(2, [&] {
         out << "const std::string &serviceName,\n"
@@ -277,11 +282,13 @@ void AST::generateInterfaceHeader(Formatter& out) const {
 
         out.indent();
 
-        DocComment("Type tag for use in template logic that indicates this is a 'pure' class.")
+        DocComment("Type tag for use in template logic that indicates this is a 'pure' class.",
+                   HIDL_LOCATION_HERE)
                 .emit(out);
         generateCppTag(out, "android::hardware::details::i_tag");
 
-        DocComment("Fully qualified interface name: \"" + iface->fqName().string() + "\"")
+        DocComment("Fully qualified interface name: \"" + iface->fqName().string() + "\"",
+                   HIDL_LOCATION_HERE)
                 .emit(out);
         out << "static const char* descriptor;\n\n";
 
@@ -292,7 +299,8 @@ void AST::generateInterfaceHeader(Formatter& out) const {
 
     if (iface) {
         DocComment(
-                "Returns whether this object's implementation is outside of the current process.")
+                "Returns whether this object's implementation is outside of the current process.",
+                HIDL_LOCATION_HERE)
                 .emit(out);
         out << "virtual bool isRemote() const ";
         if (!isIBase()) {
@@ -309,15 +317,13 @@ void AST::generateInterfaceHeader(Formatter& out) const {
             const NamedReference<Type>* elidedReturn = method->canElideCallback();
 
             if (elidedReturn == nullptr && returnsValue) {
-                DocComment("Return callback for " + method->name()).emit(out);
+                DocComment("Return callback for " + method->name(), HIDL_LOCATION_HERE).emit(out);
                 out << "using "
                     << method->name()
                     << "_cb = std::function<void(";
                 method->emitCppResultSignature(out, true /* specify namespaces */);
                 out << ")>;\n";
             }
-
-            method->dumpAnnotations(out);
 
             method->emitDocComment(out);
 
@@ -348,7 +354,8 @@ void AST::generateInterfaceHeader(Formatter& out) const {
         for (const Interface *superType : iface->typeChain()) {
             DocComment(
                     "This performs a checked cast based on what the underlying implementation "
-                    "actually is.")
+                    "actually is.",
+                    HIDL_LOCATION_HERE)
                     .emit(out);
             out << "static ::android::hardware::Return<"
                 << childTypeResult
@@ -628,7 +635,7 @@ void AST::generateMethods(Formatter& out, const MethodGenerator& gen, bool inclu
 }
 
 void AST::generateTemplatizationLink(Formatter& out) const {
-    DocComment("The pure class is what this class wraps.").emit(out);
+    DocComment("The pure class is what this class wraps.", HIDL_LOCATION_HERE).emit(out);
     out << "typedef " << mRootScope.getInterface()->localName() << " Pure;\n\n";
 }
 
@@ -689,7 +696,8 @@ void AST::generateStubHeader(Formatter& out) const {
 
     out.endl();
     generateTemplatizationLink(out);
-    DocComment("Type tag for use in template logic that indicates this is a 'native' class.")
+    DocComment("Type tag for use in template logic that indicates this is a 'native' class.",
+               HIDL_LOCATION_HERE)
             .emit(out);
     generateCppTag(out, "android::hardware::details::bnhw_tag");
 
@@ -783,11 +791,14 @@ void AST::generateProxyHeader(Formatter& out) const {
         << "\n\n";
 
     generateTemplatizationLink(out);
-    DocComment("Type tag for use in template logic that indicates this is a 'proxy' class.")
+    DocComment("Type tag for use in template logic that indicates this is a 'proxy' class.",
+               HIDL_LOCATION_HERE)
             .emit(out);
     generateCppTag(out, "android::hardware::details::bphw_tag");
 
     out << "virtual bool isRemote() const override { return true; }\n\n";
+
+    out << "void onLastStrongRef(const void* id) override;\n\n";
 
     generateMethods(
         out,
@@ -985,23 +996,6 @@ void AST::emitCppReaderWriter(Formatter& out, const std::string& parcelObj, bool
             mode);
 }
 
-void AST::emitCppResolveReferences(Formatter& out, const std::string& parcelObj,
-                                   bool parcelObjIsPointer, const NamedReference<Type>* arg,
-                                   bool isReader, Type::ErrorMode mode,
-                                   bool addPrefixToName) const {
-    const Type &type = arg->type();
-    if(type.needsResolveReferences()) {
-        type.emitResolveReferences(
-                out,
-                addPrefixToName ? ("_hidl_out_" + arg->name()) : arg->name(),
-                isReader, // nameIsPointer
-                parcelObj,
-                parcelObjIsPointer,
-                isReader,
-                mode);
-    }
-}
-
 void AST::generateProxyMethodSource(Formatter& out, const std::string& klassName,
                                     const Method* method, const Interface* superInterface) const {
     method->generateCppSignature(out,
@@ -1108,24 +1102,12 @@ void AST::generateStaticProxyMethodSource(Formatter& out, const std::string& kla
     out << "if (_hidl_err != ::android::OK) { goto _hidl_error; }\n\n";
 
     bool hasInterfaceArgument = false;
-    // First DFS: write all buffers and resolve pointers for parent
+
     for (const auto &arg : method->args()) {
         if (arg->type().isInterface()) {
             hasInterfaceArgument = true;
         }
         emitCppReaderWriter(
-                out,
-                "_hidl_data",
-                false /* parcelObjIsPointer */,
-                arg,
-                false /* reader */,
-                Type::ErrorMode_Goto,
-                false /* addPrefixToName */);
-    }
-
-    // Second DFS: resolve references.
-    for (const auto &arg : method->args()) {
-        emitCppResolveReferences(
                 out,
                 "_hidl_data",
                 false /* parcelObjIsPointer */,
@@ -1178,21 +1160,8 @@ void AST::generateStaticProxyMethodSource(Formatter& out, const std::string& kla
             out << "if (!_hidl_status.isOk()) { return _hidl_status; }\n\n";
         }
 
-        // First DFS: write all buffers and resolve pointers for parent
         for (const auto &arg : method->results()) {
             emitCppReaderWriter(
-                    out,
-                    "_hidl_reply",
-                    false /* parcelObjIsPointer */,
-                    arg,
-                    true /* reader */,
-                    errorMode,
-                    true /* addPrefixToName */);
-        }
-
-        // Second DFS: resolve references.
-        for (const auto &arg : method->results()) {
-            emitCppResolveReferences(
                     out,
                     "_hidl_reply",
                     false /* parcelObjIsPointer */,
@@ -1281,6 +1250,18 @@ void AST::generateProxySource(Formatter& out, const FQName& fqName) const {
     out.unindent();
     out.unindent();
     out << "}\n\n";
+
+    out << "void " << klassName << "::onLastStrongRef(const void* id) ";
+    out.block([&] {
+        out.block([&] {
+            // if unlinkToDeath is not used, remove strong cycle between
+            // this and hidl_binder_death_recipient
+            out << "std::unique_lock<std::mutex> lock(_hidl_mMutex);\n";
+            out << "_hidl_mDeathRecipients.clear();\n";
+        }).endl().endl();
+
+        out << "BpInterface<" << fqName.getInterfaceName() << ">::onLastStrongRef(id);\n";
+    }).endl();
 
     generateMethods(out,
                     [&](const Method* method, const Interface* superInterface) {
@@ -1411,11 +1392,6 @@ void AST::generateStubSource(Formatter& out, const Interface* iface) const {
 
         out.indent();
 
-        out << "bool _hidl_is_oneway = _hidl_flags & " << Interface::FLAG_ONE_WAY->cppValue()
-            << ";\n";
-        out << "if (_hidl_is_oneway != " << (method->isOneway() ? "true" : "false") << ") ";
-        out.block([&] { out << "return ::android::UNKNOWN_ERROR;\n"; }).endl().endl();
-
         generateStubSourceForMethod(out, method, superInterface);
 
         out.unindent();
@@ -1520,21 +1496,8 @@ void AST::generateStaticStubMethodSource(Formatter& out, const FQName& fqName,
 
     declareCppReaderLocals(out, method->args(), false /* forResults */);
 
-    // First DFS: write buffers
     for (const auto &arg : method->args()) {
         emitCppReaderWriter(
-                out,
-                "_hidl_data",
-                false /* parcelObjIsPointer */,
-                arg,
-                true /* reader */,
-                Type::ErrorMode_Return,
-                false /* addPrefixToName */);
-    }
-
-    // Second DFS: resolve references
-    for (const auto &arg : method->args()) {
-        emitCppResolveReferences(
                 out,
                 "_hidl_data",
                 false /* parcelObjIsPointer */,
@@ -1589,15 +1552,6 @@ void AST::generateStaticStubMethodSource(Formatter& out, const FQName& fqName,
                 false, /* isReader */
                 Type::ErrorMode_Ignore);
 
-        emitCppResolveReferences(
-                out,
-                "_hidl_reply",
-                true /* parcelObjIsPointer */,
-                elidedReturn,
-                false /* reader */,
-                Type::ErrorMode_Ignore,
-                true /* addPrefixToName */);
-
         generateCppInstrumentationCall(
                 out,
                 InstrumentationEvent::SERVER_API_EXIT,
@@ -1646,21 +1600,8 @@ void AST::generateStaticStubMethodSource(Formatter& out, const FQName& fqName,
             out << "::android::hardware::writeToParcel(::android::hardware::Status::ok(), "
                 << "_hidl_reply);\n\n";
 
-            // First DFS: buffers
             for (const auto &arg : method->results()) {
                 emitCppReaderWriter(
-                        out,
-                        "_hidl_reply",
-                        true /* parcelObjIsPointer */,
-                        arg,
-                        false /* reader */,
-                        Type::ErrorMode_Ignore,
-                        true /* addPrefixToName */);
-            }
-
-            // Second DFS: resolve references
-            for (const auto &arg : method->results()) {
-                emitCppResolveReferences(
                         out,
                         "_hidl_reply",
                         true /* parcelObjIsPointer */,
