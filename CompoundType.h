@@ -21,6 +21,7 @@
 #include "Reference.h"
 #include "Scope.h"
 
+#include <string>
 #include <vector>
 
 namespace android {
@@ -32,11 +33,12 @@ struct CompoundType : public Scope {
         STYLE_SAFE_UNION,
     };
 
-    CompoundType(Style style, const char* localName, const FQName& fullName,
+    CompoundType(Style style, const std::string& localName, const FQName& fullName,
                  const Location& location, Scope* parent);
 
     Style style() const;
 
+    std::vector<const NamedReference<Type>*> getFields() const;
     void setFields(std::vector<NamedReference<Type>*>* fields);
 
     bool isCompoundType() const override;
@@ -100,6 +102,7 @@ struct CompoundType : public Scope {
             const std::string &offset,
             bool isReader) const override;
 
+    void emitHidlDefinition(Formatter& out) const override;
     void emitTypeDeclarations(Formatter& out) const override;
     void emitTypeForwardDeclaration(Formatter& out) const override;
     void emitPackageTypeDeclarations(Formatter& out) const override;
@@ -141,6 +144,9 @@ private:
 
     Style mStyle;
     std::vector<NamedReference<Type>*>* mFields;
+
+    // only emits the struct body. doesn't emit the last ";\n" from the definition
+    void emitInlineHidlDefinition(Formatter& out) const;
 
     void emitLayoutAsserts(Formatter& out, const Layout& localLayout,
                            const std::string& localLayoutName) const;

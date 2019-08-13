@@ -306,7 +306,6 @@ bool isValidTypeName(const std::string& identifier, std::string *errorMsg) {
 %type<method> method_declaration commentable_method_declaration
 %type<compoundStyle> struct_or_union_keyword
 %type<stringVec> annotation_string_values annotation_string_value
-%type<constExprVec> annotation_const_expr_values annotation_const_expr_value
 %type<annotationParam> annotation_param
 %type<annotationParams> opt_annotation_params annotation_params
 %type<annotation> annotation
@@ -332,7 +331,6 @@ bool isValidTypeName(const std::string& identifier, std::string *errorMsg) {
     android::Method *method;
     android::CompoundType::Style compoundStyle;
     std::vector<std::string> *stringVec;
-    std::vector<android::ConstantExpression *> *constExprVec;
     android::AnnotationParam *annotationParam;
     android::AnnotationParamVector *annotationParams;
     android::Annotation *annotation;
@@ -436,10 +434,6 @@ annotation_param
       {
           $$ = new StringAnnotationParam($1, $3);
       }
-    | IDENTIFIER '=' annotation_const_expr_value
-      {
-          $$ = new ConstantExpressionAnnotationParam($1, $3);
-      }
     ;
 
 annotation_string_value
@@ -458,28 +452,6 @@ annotation_string_values
           $$->push_back($1);
       }
     | annotation_string_values ',' STRING_LITERAL
-      {
-          $$ = $1;
-          $$->push_back($3);
-      }
-    ;
-
-annotation_const_expr_value
-    : const_expr
-      {
-          $$ = new std::vector<ConstantExpression *>;
-          $$->push_back($1);
-      }
-    | '{' annotation_const_expr_values '}' { $$ = $2; }
-    ;
-
-annotation_const_expr_values
-    : const_expr
-      {
-          $$ = new std::vector<ConstantExpression *>;
-          $$->push_back($1);
-      }
-    | annotation_const_expr_values ',' const_expr
       {
           $$ = $1;
           $$->push_back($3);
@@ -529,11 +501,11 @@ fqname
 fqtype
     : fqname
       {
-          $$ = new Reference<Type>(*$1, convertYYLoc(@1, ast));
+          $$ = new Reference<Type>($1->string(), *$1, convertYYLoc(@1, ast));
       }
     | TYPE
       {
-          $$ = new Reference<Type>($1, convertYYLoc(@1, ast));
+          $$ = new Reference<Type>($1->definedName(), $1, convertYYLoc(@1, ast));
       }
     ;
 
@@ -591,7 +563,7 @@ interface_declarations
 
           std::string errorMsg;
           if ($2 != nullptr && $2->isNamedType() &&
-              !isValidInterfaceField(static_cast<NamedType*>($2)->localName().c_str(),
+              !isValidInterfaceField(static_cast<NamedType*>($2)->definedName().c_str(),
                     &errorMsg)) {
               std::cerr << "ERROR: " << errorMsg << " at "
                         << @2 << "\n";
@@ -713,7 +685,7 @@ interface_declaration
               }
 
               if (superType == nullptr) {
-                  superType = new Reference<Type>(gIBaseFqName, convertYYLoc(@$, ast));
+                  superType = new Reference<Type>(gIBaseFqName.string(), gIBaseFqName, convertYYLoc(@$, ast));
               }
           }
 
@@ -788,12 +760,12 @@ const_expr
           }
 
           $$ = new ReferenceConstantExpression(
-              Reference<LocalIdentifier>(*$1, convertYYLoc(@1, ast)), $1->string());
+              Reference<LocalIdentifier>($1->string(), *$1, convertYYLoc(@1, ast)), $1->string());
       }
     | fqname '#' IDENTIFIER
       {
           $$ = new AttributeConstantExpression(
-              Reference<Type>(*$1, convertYYLoc(@1, ast)), $1->string(), $3);
+              Reference<Type>($1->string(), *$1, convertYYLoc(@1, ast)), $1->string(), $3);
       }
     | const_expr '?' const_expr ':' const_expr
       {
@@ -821,7 +793,11 @@ const_expr
     | '-' const_expr %prec UNARY_MINUS { $$ = new UnaryConstantExpression("-", $2); }
     | '!' const_expr { $$ = new UnaryConstantExpression("!", $2); }
     | '~' const_expr { $$ = new UnaryConstantExpression("~", $2); }
-    | '(' const_expr ')' { $$ = $2; }
+    | '(' const_expr ')'
+      {
+        $2->surroundWithParens();
+        $$ = $2;
+      }
     | '(' error ')'
       {
         ast->addSyntaxError();
@@ -1007,7 +983,7 @@ field_declaration
 
           if ($1 != nullptr && $1->isNamedType() &&
               !isValidCompoundTypeField(style, static_cast<NamedType*>(
-                        $1)->localName().c_str(), &errorMsg)) {
+                        $1)->definedName().c_str(), &errorMsg)) {
               std::cerr << "ERROR: " << errorMsg << " at "
                         << @2 << "\n";
               YYERROR;
@@ -1045,8 +1021,8 @@ named_enum_declaration
               std::cerr << "ERROR: Must explicitly specify enum storage type for "
                         << $2 << " at " << @2 << "\n";
               ast->addSyntaxError();
-              storageType = new Reference<Type>(
-                  new ScalarType(ScalarType::KIND_INT64, *scope), convertYYLoc(@2, ast));
+              ScalarType* scalar = new ScalarType(ScalarType::KIND_INT64, *scope);
+              storageType = new Reference<Type>(scalar->definedName(), scalar, convertYYLoc(@2, ast));
           }
 
           EnumType* enumType = new EnumType(
@@ -1123,13 +1099,13 @@ array_type_base
     | TEMPLATED '<' type '>'
       {
           $1->setElementType(*$3);
-          $$ = new Reference<Type>($1, convertYYLoc(@1, ast));
+          $$ = new Reference<Type>($1->definedName(), $1, convertYYLoc(@1, ast));
       }
     | TEMPLATED '<' TEMPLATED '<' type RSHIFT
       {
           $3->setElementType(*$5);
-          $1->setElementType(Reference<Type>($3, convertYYLoc(@3, ast)));
-          $$ = new Reference<Type>($1, convertYYLoc(@1, ast));
+          $1->setElementType(Reference<Type>($3->definedName(), $3, convertYYLoc(@3, ast)));
+          $$ = new Reference<Type>($1->definedName(), $1, convertYYLoc(@1, ast));
       }
     ;
 
@@ -1149,12 +1125,12 @@ type
     : array_type_base ignore_doc_comments { $$ = $1; }
     | array_type ignore_doc_comments
       {
-        $$ = new Reference<Type>($1, convertYYLoc(@1, ast));
+        $$ = new Reference<Type>($1->definedName(), $1, convertYYLoc(@1, ast));
       }
     | INTERFACE ignore_doc_comments
       {
         // "interface" is a synonym of android.hidl.base@1.0::IBase
-        $$ = new Reference<Type>(gIBaseFqName, convertYYLoc(@1, ast));
+        $$ = new Reference<Type>("interface", gIBaseFqName, convertYYLoc(@1, ast));
       }
     ;
 
@@ -1162,7 +1138,7 @@ type_or_inplace_compound_declaration
     : type { $$ = $1; }
     | annotated_compound_declaration ignore_doc_comments
       {
-          $$ = new Reference<Type>($1, convertYYLoc(@1, ast));
+          $$ = new Reference<Type>($1->definedName(), $1, convertYYLoc(@1, ast), true);
       }
     ;
 

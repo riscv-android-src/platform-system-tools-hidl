@@ -30,6 +30,7 @@
 #include <iostream>
 #include <memory>
 #include <sstream>
+#include <string>
 #include <unordered_map>
 
 #include <android-base/logging.h>
@@ -71,12 +72,12 @@ enum {
 const std::unique_ptr<ConstantExpression> Interface::FLAG_ONE_WAY =
     std::make_unique<LiteralConstantExpression>(ScalarType::KIND_UINT32, 0x01, "oneway");
 
-Interface::Interface(const char* localName, const FQName& fullName, const Location& location,
+Interface::Interface(const std::string& localName, const FQName& fullName, const Location& location,
                      Scope* parent, const Reference<Type>& superType, const Hash* fileHash)
     : Scope(localName, fullName, location, parent), mSuperType(superType), mFileHash(fileHash) {}
 
 std::string Interface::typeName() const {
-    return "interface " + localName();
+    return "interface " + definedName();
 }
 
 const Hash* Interface::getFileHash() const {
@@ -461,15 +462,6 @@ std::vector<const Reference<Type>*> Interface::getReferences() const {
     return ret;
 }
 
-std::vector<const ConstantExpression*> Interface::getConstantExpressions() const {
-    std::vector<const ConstantExpression*> ret;
-    for (const auto* method : methods()) {
-        const auto& retMethod = method->getConstantExpressions();
-        ret.insert(ret.end(), retMethod.begin(), retMethod.end());
-    }
-    return ret;
-}
-
 std::vector<const Reference<Type>*> Interface::getStrongReferences() const {
     // Interface is a special case as a reference:
     // its definiton must be completed for extension but
@@ -746,7 +738,7 @@ std::string Interface::getJavaType(bool /* forInitializer */) const {
 }
 
 std::string Interface::getVtsType() const {
-    if (StringHelper::EndsWith(localName(), "Callback")) {
+    if (StringHelper::EndsWith(definedName(), "Callback")) {
         return "TYPE_HIDL_CALLBACK";
     } else {
         return "TYPE_HIDL_INTERFACE";
@@ -822,6 +814,33 @@ void Interface::emitReaderWriter(
     }
 }
 
+void Interface::emitHidlDefinition(Formatter& out) const {
+    if (getDocComment() != nullptr) getDocComment()->emit(out);
+    out << typeName() << " ";
+
+    const Interface* super = superType();
+    if (super != nullptr && !super->isIBase()) {
+        out << "extends " << super->fqName().getRelativeFQName(fqName()) << " ";
+    }
+
+    out << "{";
+
+    out.indent([&] {
+        const std::vector<const NamedType*>& definedTypes = getSortedDefinedTypes();
+        if (definedTypes.size() > 0 || userDefinedMethods().size() > 0) out << "\n";
+
+        out.join(definedTypes.begin(), definedTypes.end(), "\n",
+                 [&](auto t) { t->emitHidlDefinition(out); });
+
+        if (definedTypes.size() > 0 && userDefinedMethods().size() > 0) out << "\n";
+
+        out.join(userDefinedMethods().begin(), userDefinedMethods().end(), "\n",
+                 [&](auto method) { method->emitHidlDefinition(out); });
+    });
+
+    out << "};\n";
+}
+
 void Interface::emitPackageTypeDeclarations(Formatter& out) const {
     Scope::emitPackageTypeDeclarations(out);
 
@@ -845,7 +864,7 @@ void Interface::emitPackageTypeHeaderDefinitions(Formatter& out) const {
 void Interface::emitTypeDefinitions(Formatter& out, const std::string& prefix) const {
     std::string space = prefix.empty() ? "" : (prefix + "::");
 
-    Scope::emitTypeDefinitions(out, space + localName());
+    Scope::emitTypeDefinitions(out, space + definedName());
 }
 
 void Interface::emitJavaReaderWriter(
