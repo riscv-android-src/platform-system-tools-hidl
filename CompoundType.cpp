@@ -17,17 +17,21 @@
 #include "CompoundType.h"
 
 #include "ArrayType.h"
+#include "Reference.h"
 #include "ScalarType.h"
 #include "VectorType.h"
 
 #include <android-base/logging.h>
 #include <hidl-util/Formatter.h>
 #include <iostream>
+#include <set>
+#include <string>
 #include <unordered_set>
+#include <vector>
 
 namespace android {
 
-CompoundType::CompoundType(Style style, const char* localName, const FQName& fullName,
+CompoundType::CompoundType(Style style, const std::string& localName, const FQName& fullName,
                            const Location& location, Scope* parent)
     : Scope(localName, fullName, location, parent), mStyle(style), mFields(nullptr) {}
 
@@ -37,6 +41,11 @@ CompoundType::Style CompoundType::style() const {
 
 void CompoundType::setFields(std::vector<NamedReference<Type>*>* fields) {
     mFields = fields;
+}
+
+std::vector<const NamedReference<Type>*> CompoundType::getFields() const {
+    return mFields ? std::vector<const NamedReference<Type>*>(mFields->begin(), mFields->end())
+                   : std::vector<const NamedReference<Type>*>();
 }
 
 std::vector<const Reference<Type>*> CompoundType::getReferences() const {
@@ -102,9 +111,9 @@ status_t CompoundType::validateUniqueNames() const {
 
 void CompoundType::emitInvalidSubTypeNamesError(const std::string& subTypeName,
                                                 const Location& location) const {
-    std::cerr << "ERROR: Type name '" << subTypeName << "' defined at "
-              << location << " conflicts with a member function of "
-              << "safe_union " << localName() << ". Consider renaming or "
+    std::cerr << "ERROR: Type name '" << subTypeName << "' defined at " << location
+              << " conflicts with a member function of "
+              << "safe_union " << definedName() << ". Consider renaming or "
               << "moving its definition outside the safe_union scope.\n";
 }
 
@@ -113,9 +122,8 @@ status_t CompoundType::validateSubTypeNames() const {
     const auto& subTypes = Scope::getSubTypes();
 
     for (const auto& subType : subTypes) {
-        if (subType->localName() == "getDiscriminator") {
-            emitInvalidSubTypeNamesError(subType->localName(),
-                                         subType->location());
+        if (subType->definedName() == "getDiscriminator") {
+            emitInvalidSubTypeNamesError(subType->definedName(), subType->location());
             return UNKNOWN_ERROR;
         }
     }
@@ -142,13 +150,13 @@ bool CompoundType::deepCanCheckEquality(std::unordered_set<const Type*>* visited
 std::string CompoundType::typeName() const {
     switch (mStyle) {
         case STYLE_STRUCT: {
-            return "struct " + localName();
+            return "struct " + definedName();
         }
         case STYLE_UNION: {
-            return "union " + localName();
+            return "union " + definedName();
         }
         case STYLE_SAFE_UNION: {
-            return "safe_union " + localName();
+            return "safe_union " + definedName();
         }
     }
     CHECK(!"Should not be here");
@@ -481,83 +489,6 @@ void CompoundType::emitJavaFieldReaderWriter(
         << offset
         << ");\n";
 }
-void CompoundType::emitResolveReferences(
-            Formatter &out,
-            const std::string &name,
-            bool nameIsPointer,
-            const std::string &parcelObj,
-            bool parcelObjIsPointer,
-            bool isReader,
-            ErrorMode mode) const {
-    emitResolveReferencesEmbedded(
-        out,
-        0 /* depth */,
-        name,
-        name /* sanitizedName */,
-        nameIsPointer,
-        parcelObj,
-        parcelObjIsPointer,
-        isReader,
-        mode,
-        "_hidl_" + name + "_parent",
-        "0 /* parentOffset */");
-}
-
-void CompoundType::emitResolveReferencesEmbedded(
-            Formatter &out,
-            size_t /* depth */,
-            const std::string &name,
-            const std::string &/* sanitizedName */,
-            bool nameIsPointer,
-            const std::string &parcelObj,
-            bool parcelObjIsPointer,
-            bool isReader,
-            ErrorMode mode,
-            const std::string &parentName,
-            const std::string &offsetText) const {
-    CHECK(needsResolveReferences());
-
-    const std::string parcelObjDeref =
-        parcelObjIsPointer ? ("*" + parcelObj) : parcelObj;
-
-    const std::string parcelObjPointer =
-        parcelObjIsPointer ? parcelObj : ("&" + parcelObj);
-
-    const std::string nameDerefed = nameIsPointer ? ("*" + name) : name;
-    const std::string namePointer = nameIsPointer ? name : ("&" + name);
-
-    out << "_hidl_err = ";
-
-    if (isReader) {
-        out << "readEmbeddedReferenceFromParcel(\n";
-    } else {
-        out << "writeEmbeddedReferenceToParcel(\n";
-    }
-
-    out.indent(2, [&]{
-        if (isReader) {
-            out << "const_cast<"
-                << fullName()
-                << " *"
-                << ">("
-                << namePointer
-                << "),\n"
-                << parcelObjDeref;
-        } else {
-            out << nameDerefed
-                << ",\n"
-                << parcelObjPointer;
-        }
-
-        out << ",\n"
-            << parentName
-            << ",\n"
-            << offsetText
-            << ");\n\n";
-    });
-
-    handleError(out, mode);
-}
 
 void CompoundType::emitLayoutAsserts(Formatter& out, const Layout& layout,
                                      const std::string& layoutName) const {
@@ -577,9 +508,7 @@ void CompoundType::emitLayoutAsserts(Formatter& out, const Layout& layout,
 }
 
 void CompoundType::emitSafeUnionTypeDeclarations(Formatter& out) const {
-    out << "struct "
-        << localName()
-        << " final {\n";
+    out << "struct " << definedName() << " final {\n";
 
     out.indent();
 
@@ -609,12 +538,12 @@ void CompoundType::emitSafeUnionTypeDeclarations(Formatter& out) const {
     });
     out << ";\n\n";
 
-    out << localName() << "();\n"  // Constructor
-        << "~" << localName() << "();\n"  // Destructor
-        << localName() << "(" << localName() << "&&);\n"  // Move constructor
-        << localName() << "(const " << localName() << "&);\n"  // Copy constructor
-        << localName() << "& operator=(" << localName() << "&&);\n"  // Move assignment
-        << localName() << "& operator=(const " << localName() << "&);\n\n";  // Copy assignment
+    out << definedName() << "();\n"                                              // Constructor
+        << "~" << definedName() << "();\n"                                       // Destructor
+        << definedName() << "(" << definedName() << "&&);\n"                     // Move constructor
+        << definedName() << "(const " << definedName() << "&);\n"                // Copy constructor
+        << definedName() << "& operator=(" << definedName() << "&&);\n"          // Move assignment
+        << definedName() << "& operator=(const " << definedName() << "&);\n\n";  // Copy assignment
 
     for (const auto& field : *mFields) {
         // Setter (copy)
@@ -709,16 +638,65 @@ void CompoundType::emitSafeUnionTypeDeclarations(Formatter& out) const {
     }
 }
 
+void CompoundType::emitHidlDefinition(Formatter& out) const {
+    emitInlineHidlDefinition(out);
+    out << ";\n";
+}
+
+void CompoundType::emitInlineHidlDefinition(Formatter& out) const {
+    if (getDocComment() != nullptr) getDocComment()->emit(out);
+    out << typeName() << " ";
+
+    std::set<FQName> namesDeclaredInScope;
+    for (const NamedReference<Type>* ref : *mFields) {
+        if (ref->definedInline()) {
+            const Type* type = ref->get();
+            CHECK(type->isCompoundType()) << " only compound types can be defined inline";
+            namesDeclaredInScope.insert(static_cast<const CompoundType*>(type)->fqName());
+        }
+    }
+
+    std::vector<const NamedType*> preDeclaredTypes;
+    for (const NamedType* namedType : getSortedDefinedTypes()) {
+        if (namesDeclaredInScope.find(namedType->fqName()) == namesDeclaredInScope.end()) {
+            // have to predeclare it
+            preDeclaredTypes.push_back(namedType);
+        }
+    }
+
+    if (preDeclaredTypes.empty() && mFields->empty()) {
+        out << "{}";
+    } else {
+        out.block([&] {
+            for (const Type* t : preDeclaredTypes) {
+                t->emitHidlDefinition(out);
+            }
+
+            if (!preDeclaredTypes.empty() && !mFields->empty()) out << "\n";
+
+            for (const NamedReference<Type>* ref : *mFields) {
+                if (ref->getDocComment() != nullptr) ref->getDocComment()->emit(out);
+
+                if (ref->definedInline()) {
+                    // Same check as above, this is for sanity
+                    CHECK(ref->get()->isCompoundType());
+                    static_cast<const CompoundType*>(ref->get())->emitInlineHidlDefinition(out);
+                    out << " " << ref->name() << ";\n";
+                } else {
+                    out << ref->localName() << " " << ref->name() << ";\n";
+                }
+            }
+        });
+    }
+}
+
 void CompoundType::emitTypeDeclarations(Formatter& out) const {
     if (mStyle == STYLE_SAFE_UNION) {
         emitSafeUnionTypeDeclarations(out);
         return;
     }
 
-    out << ((mStyle == STYLE_STRUCT) ? "struct" : "union")
-        << " "
-        << localName()
-        << " final {\n";
+    out << ((mStyle == STYLE_STRUCT) ? "struct" : "union") << " " << definedName() << " final {\n";
 
     out.indent();
 
@@ -796,7 +774,7 @@ void CompoundType::emitTypeForwardDeclaration(Formatter& out) const {
             CHECK(!"Should not be here");
         }
     }
-    out << " " << localName() << ";\n";
+    out << " " << definedName() << ";\n";
 }
 
 void CompoundType::emitPackageTypeDeclarations(Formatter& out) const {
@@ -814,7 +792,7 @@ void CompoundType::emitPackageTypeDeclarations(Formatter& out) const {
         out << "static inline bool operator!=("
             << getCppArgumentType() << " lhs, " << getCppArgumentType() << " rhs);\n";
     } else {
-        out << "// operator== and operator!= are not generated for " << localName() << "\n";
+        out << "// operator== and operator!= are not generated for " << definedName() << "\n";
     }
 
     out.endl();
@@ -936,7 +914,7 @@ void CompoundType::emitPackageTypeHeaderDefinitions(Formatter& out) const {
             out << "return !(lhs == rhs);\n";
         }).endl().endl();
     } else {
-        out << "// operator== and operator!= are not generated for " << localName() << "\n\n";
+        out << "// operator== and operator!= are not generated for " << definedName() << "\n\n";
     }
 }
 
@@ -962,21 +940,6 @@ void CompoundType::emitPackageHwDeclarations(Formatter& out) const {
             << "size_t parentHandle,\n"
             << "size_t parentOffset);\n\n";
 
-        out.unindent(2);
-    }
-
-    if(needsResolveReferences()) {
-        out << "::android::status_t readEmbeddedReferenceFromParcel(\n";
-        out.indent(2);
-        out << fullName() << " *obj,\n"
-            << "const ::android::hardware::Parcel &parcel,\n"
-            << "size_t parentHandle, size_t parentOffset);\n\n";
-        out.unindent(2);
-        out << "::android::status_t writeEmbeddedReferenceToParcel(\n";
-        out.indent(2);
-        out << "const " << fullName() << " &obj,\n"
-            << "::android::hardware::Parcel *,\n"
-            << "size_t parentHandle, size_t parentOffset);\n\n";
         out.unindent(2);
     }
 }
@@ -1117,10 +1080,7 @@ void CompoundType::emitSafeUnionCopyAndAssignDefinition(Formatter& out,
 void CompoundType::emitSafeUnionTypeConstructors(Formatter& out) const {
 
     // Default constructor
-    out << fullName()
-        << "::"
-        << localName()
-        << "() ";
+    out << fullName() << "::" << definedName() << "() ";
 
     out.block([&] {
         out << "static_assert(offsetof("
@@ -1143,54 +1103,32 @@ void CompoundType::emitSafeUnionTypeConstructors(Formatter& out) const {
     }).endl().endl();
 
     // Destructor
-    out << fullName()
-        << "::~"
-        << localName()
-        << "() ";
+    out << fullName() << "::~" << definedName() << "() ";
 
     out.block([&] {
         out << "hidl_destructUnion();\n";
     }).endl().endl();
 
     // Move constructor
-    out << fullName()
-        << "::"
-        << localName()
-        << "("
-        << localName()
-        << "&& other) ";
+    out << fullName() << "::" << definedName() << "(" << definedName() << "&& other) ";
 
     emitSafeUnionCopyAndAssignDefinition(
             out, "other", true /* isCopyConstructor */, true /* usesMoveSemantics */);
 
     // Copy constructor
-    out << fullName()
-        << "::"
-        << localName()
-        << "(const "
-        << localName()
-        << "& other) ";
+    out << fullName() << "::" << definedName() << "(const " << definedName() << "& other) ";
 
     emitSafeUnionCopyAndAssignDefinition(
         out, "other", true /* isCopyConstructor */, false /* usesMoveSemantics */);
 
     // Move assignment operator
-    out << fullName()
-        << "& ("
-        << fullName()
-        << "::operator=)("
-        << localName()
-        << "&& other) ";
+    out << fullName() << "& (" << fullName() << "::operator=)(" << definedName() << "&& other) ";
 
     emitSafeUnionCopyAndAssignDefinition(
             out, "other", false /* isCopyConstructor */, true /* usesMoveSemantics */);
 
     // Copy assignment operator
-    out << fullName()
-        << "& ("
-        << fullName()
-        << "::operator=)(const "
-        << localName()
+    out << fullName() << "& (" << fullName() << "::operator=)(const " << definedName()
         << "& other) ";
 
     emitSafeUnionCopyAndAssignDefinition(
@@ -1289,16 +1227,11 @@ void CompoundType::emitSafeUnionTypeDefinitions(Formatter& out) const {
 
 void CompoundType::emitTypeDefinitions(Formatter& out, const std::string& prefix) const {
     std::string space = prefix.empty() ? "" : (prefix + "::");
-    Scope::emitTypeDefinitions(out, space + localName());
+    Scope::emitTypeDefinitions(out, space + definedName());
 
     if (needsEmbeddedReadWrite()) {
         emitStructReaderWriter(out, prefix, true /* isReader */);
         emitStructReaderWriter(out, prefix, false /* isReader */);
-    }
-
-    if (needsResolveReferences()) {
-        emitResolveReferenceDef(out, prefix, true /* isReader */);
-        emitResolveReferenceDef(out, prefix, false /* isReader */);
     }
 
     if (mStyle == STYLE_SAFE_UNION) {
@@ -1325,16 +1258,14 @@ void CompoundType::emitJavaTypeDeclarations(Formatter& out, bool atTopLevel) con
         out << "static ";
     }
 
-    out << "class "
-        << localName()
-        << " {\n";
+    out << "class " << definedName() << " {\n";
 
     out.indent();
 
     Scope::emitJavaTypeDeclarations(out, false /* atTopLevel */);
 
     if (mStyle == STYLE_SAFE_UNION) {
-        out << "public " << localName() << "() ";
+        out << "public " << definedName() << "() ";
         out.block([&] {
             CHECK(!mFields->empty());
             mFields->at(0)->type().emitJavaFieldDefaultInitialValue(out, "hidl_o");
@@ -1516,7 +1447,7 @@ void CompoundType::emitJavaTypeDeclarations(Formatter& out, bool atTopLevel) con
             out << ");\n";
         }).endl().endl();
     } else {
-        out << "// equals() is not generated for " << localName() << "\n";
+        out << "// equals() is not generated for " << definedName() << "\n";
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -1625,11 +1556,11 @@ void CompoundType::emitJavaTypeDeclarations(Formatter& out, bool atTopLevel) con
     size_t vecAlign, vecSize;
     VectorType::getAlignmentAndSizeStatic(&vecAlign, &vecSize);
 
-    out << "public static final java.util.ArrayList<" << localName()
+    out << "public static final java.util.ArrayList<" << definedName()
         << "> readVectorFromParcel(android.os.HwParcel parcel) {\n";
     out.indent();
 
-    out << "java.util.ArrayList<" << localName() << "> _hidl_vec = new java.util.ArrayList();\n";
+    out << "java.util.ArrayList<" << definedName() << "> _hidl_vec = new java.util.ArrayList();\n";
 
     if (containsInterface()) {
         out << "int size = parcel.readInt32();\n";
@@ -1762,7 +1693,8 @@ void CompoundType::emitJavaTypeDeclarations(Formatter& out, bool atTopLevel) con
 
     out << "public static final void writeVectorToParcel(\n";
     out.indent(2);
-    out << "android.os.HwParcel parcel, java.util.ArrayList<" << localName() << "> _hidl_vec) {\n";
+    out << "android.os.HwParcel parcel, java.util.ArrayList<" << definedName()
+        << "> _hidl_vec) {\n";
     out.unindent();
 
     if (containsInterface()) {
@@ -1859,10 +1791,10 @@ void CompoundType::emitStructReaderWriter(
 
     const std::string name = "obj";
     if (isReader) {
-        out << "const " << space << localName() << " &" << name << ",\n";
+        out << "const " << space << definedName() << " &" << name << ",\n";
         out << "const ::android::hardware::Parcel &parcel,\n";
     } else {
-        out << "const " << space << localName() << " &" << name << ",\n";
+        out << "const " << space << definedName() << " &" << name << ",\n";
         out << "::android::hardware::Parcel *parcel,\n";
     }
 
@@ -1933,111 +1865,6 @@ void CompoundType::emitStructReaderWriter(
     out << "}\n\n";
 }
 
-void CompoundType::emitResolveReferenceDef(Formatter& out, const std::string& prefix,
-                                           bool isReader) const {
-    out << "::android::status_t ";
-    const std::string space(prefix.empty() ? "" : (prefix + "::"));
-
-    bool useParent = false;
-    for (const auto &field : *mFields) {
-        if (field->type().useParentInEmitResolveReferencesEmbedded()) {
-            useParent = true;
-            break;
-        }
-    }
-
-    std::string parentHandleName = useParent ? "parentHandle" : "/* parentHandle */";
-    std::string parentOffsetName = useParent ? "parentOffset" : "/* parentOffset */";
-
-    if (isReader) {
-        out << "readEmbeddedReferenceFromParcel(\n";
-        out.indent(2);
-        out << space + localName() + " *obj,\n"
-            << "const ::android::hardware::Parcel &parcel,\n"
-            << "size_t " << parentHandleName << ", "
-            << "size_t " << parentOffsetName << ")\n";
-        out.unindent(2);
-    } else {
-        out << "writeEmbeddedReferenceToParcel(\n";
-        out.indent(2);
-        out << "const " << space + localName() + " &obj,\n"
-            << "::android::hardware::Parcel *parcel,\n"
-            << "size_t " << parentHandleName << ", "
-            << "size_t " << parentOffsetName << ")\n";
-        out.unindent(2);
-    }
-
-    out << " {\n";
-
-    out.indent();
-
-    out << "::android::status_t _hidl_err = ::android::OK;\n\n";
-
-    const std::string nameDeref(isReader ? "obj->" : "obj.");
-    // if not useParent, then parentName and offsetText
-    // should not be used at all, then the #error should not be emitted.
-    std::string error = useParent ? "" : "\n#error\n";
-
-    if (mStyle == STYLE_SAFE_UNION) {
-        out << "switch (" << nameDeref << "getDiscriminator()) {\n";
-        out.indent();
-    }
-
-    for (const auto &field : *mFields) {
-        if (!field->type().needsResolveReferences()) {
-            continue;
-        }
-
-        if (mStyle == STYLE_SAFE_UNION) {
-            out << "case " << fullName() << "::hidl_discriminator::"
-                << field->name() << ": {\n";
-            out.indent();
-        }
-
-        const std::string fieldName = (mStyle == STYLE_SAFE_UNION)
-                                        ? (nameDeref + field->name() + "()")
-                                        : (nameDeref + field->name());
-
-        const std::string fieldOffset = (mStyle == STYLE_SAFE_UNION)
-                                        ? (nameDeref + "hidl_getUnionOffset() " +
-                                           "/* safe_union: union offset into struct */")
-                                        : ("offsetof(" + fullName() + ", " + field->name() + ")");
-
-        field->type().emitResolveReferencesEmbedded(
-            out,
-            0 /* depth */,
-            fieldName,
-            field->name() /* sanitizedName */,
-            false,    // nameIsPointer
-            "parcel", // const std::string &parcelObj,
-            !isReader, // bool parcelObjIsPointer,
-            isReader, // bool isReader,
-            ErrorMode_Return,
-            parentHandleName + error,
-            parentOffsetName
-                + " + "
-                + fieldOffset
-                + error);
-
-        if (mStyle == STYLE_SAFE_UNION) {
-            out << "break;\n";
-            out.unindent();
-            out << "}\n";
-        }
-    }
-
-    if (mStyle == STYLE_SAFE_UNION) {
-        out << "default: { _hidl_err = ::android::BAD_VALUE; break; }\n";
-        out.unindent();
-        out << "}\n";
-    }
-
-    out << "return _hidl_err;\n";
-
-    out.unindent();
-    out << "}\n\n";
-}
-
 bool CompoundType::needsEmbeddedReadWrite() const {
     if (mStyle == STYLE_UNION) {
         return false;
@@ -2050,20 +1877,6 @@ bool CompoundType::needsEmbeddedReadWrite() const {
     }
 
     return false;
-}
-
-bool CompoundType::deepNeedsResolveReferences(std::unordered_set<const Type*>* visited) const {
-    if (mStyle == STYLE_UNION) {
-        return false;
-    }
-
-    for (const auto &field : *mFields) {
-        if (field->type().needsResolveReferences(visited)) {
-            return true;
-        }
-    }
-
-    return Scope::deepNeedsResolveReferences(visited);
 }
 
 bool CompoundType::resultNeedsDeref() const {

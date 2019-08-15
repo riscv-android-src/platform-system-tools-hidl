@@ -174,7 +174,7 @@ void Coordinator::onFileAccess(const std::string& path, const std::string& mode)
         // 1). If there is a bug in hidl-gen, the dependencies on the first project from
         //     the second would be required to recover correctly when the bug is fixed.
         // 2). This option is never used in Android builds.
-        mReadFiles.insert(StringHelper::LTrim(path, mRootPath));
+        mReadFiles.insert(makeRelative(path));
     }
 
     if (!mVerbose) {
@@ -201,7 +201,7 @@ status_t Coordinator::writeDepFile(const std::string& forFile) const {
     out << StringHelper::LTrim(forFile, mOutputPath) << ": \\\n";
     out.indent([&] {
         for (const std::string& file : mReadFiles) {
-            out << StringHelper::LTrim(file, mRootPath) << " \\\n";
+            out << makeRelative(file) << " \\\n";
         }
     });
     return OK;
@@ -242,18 +242,6 @@ status_t Coordinator::parseOptional(const FQName& fqName, AST** ast, std::set<AS
     // Add this to the cache immediately, so we can discover circular imports.
     mCache[fqName] = nullptr;
 
-    AST *typesAST = nullptr;
-
-    if (fqName.name() != "types") {
-        // Any interface file implicitly imports its package's types.hal.
-        FQName typesName = fqName.getTypesForPackage();
-        // Do not enforce on imports. Do not add imports' imports to this AST.
-        status_t err = parseOptional(typesName, &typesAST, nullptr, Enforce::NONE);
-        if (err != OK) return err;
-
-        // fall through.
-    }
-
     std::string packagePath;
     status_t err =
         getPackagePath(fqName, false /* relative */, false /* sanitized */, &packagePath);
@@ -263,10 +251,10 @@ status_t Coordinator::parseOptional(const FQName& fqName, AST** ast, std::set<AS
 
     *ast = new AST(this, &Hash::getHash(path));
 
-    if (typesAST != nullptr) {
+    if (fqName.name() != "types") {
         // If types.hal for this AST's package existed, make it's defined
         // types available to the (about to be parsed) AST right away.
-        (*ast)->addImportedAST(typesAST);
+        (*ast)->addImplicitImport(fqName.getTypesForPackage());
     }
 
     std::unique_ptr<FILE, std::function<void(FILE*)>> file(fopen(path.c_str(), "rb"), fclose);
@@ -301,10 +289,10 @@ status_t Coordinator::parseOptional(const FQName& fqName, AST** ast, std::set<AS
                 fprintf(stderr,
                         "ERROR: File at '%s' declares an interface '%s' "
                         "instead of the expected types common to the package.\n",
-                        path.c_str(), (*ast)->getInterface()->localName().c_str());
+                        path.c_str(), (*ast)->getInterface()->definedName().c_str());
 
                 err = UNKNOWN_ERROR;
-            } else if ((*ast)->getInterface()->localName() != fqName.name()) {
+            } else if ((*ast)->getInterface()->definedName() != fqName.name()) {
                 fprintf(stderr,
                         "ERROR: File at '%s' does not declare interface type "
                         "'%s'.\n",
@@ -396,6 +384,10 @@ std::string Coordinator::makeAbsolute(const std::string& path) const {
     }
 
     return mRootPath + path;
+}
+
+std::string Coordinator::makeRelative(const std::string& filename) const {
+    return StringHelper::LTrim(filename, mRootPath);
 }
 
 status_t Coordinator::getPackageRoot(const FQName& fqName, std::string* root) const {
