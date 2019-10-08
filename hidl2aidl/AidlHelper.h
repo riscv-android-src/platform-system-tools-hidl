@@ -48,7 +48,7 @@ struct AidlHelper {
     static Formatter getFileWithHeader(const NamedType& namedType, const Coordinator& coordinator);
 
     /* Methods for Type */
-    static std::string getAidlType(const Type& type);
+    static std::string getAidlType(const Type& type, const FQName& relativeTo);
 
     /* Methods for NamedType */
     static void emitAidl(const NamedType& namedType, const Coordinator& coordinator);
@@ -60,6 +60,13 @@ struct AidlHelper {
     static void emitAidl(const Interface& interface, const Coordinator& coordinator);
     // Returns all methods that would exist in an AIDL equivalent interface
     static std::vector<const Method*> getUserDefinedMethods(const Interface& interface);
+
+    static Formatter& notes();
+    static void setNotes(Formatter* formatter);
+
+  private:
+    // This is the formatter to use for additional conversion output
+    static Formatter* notesFormatter;
 };
 
 }  // namespace android
