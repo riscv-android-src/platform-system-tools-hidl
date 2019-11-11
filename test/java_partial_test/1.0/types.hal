@@ -14,24 +14,26 @@
  * limitations under the License.
  */
 
-package hidl2aidl@1.0;
+package hidl_java_partial_test@1.0;
 
-struct Outer {
-    struct Inner {
-        uint8_t a;
-    } inner;
+struct ExistsInJava {
+    uint32_t happyHippo;
+    uint32_t hippoHappy;
 };
 
-struct OverrideMe {
-    uint8_t a;
+struct DoesNotExistInJava {
+    memory shmemory;
 };
 
-struct OnlyIn10 {
-    string str;
+struct DoesNotExistInJavaTransitive {
+    DoesNotExistInJava transative;
 };
 
-enum Value : uint32_t {
-    A = 1 + 2,
-    B = 7,
-    C,
+struct DoesNotExistInJavaVec {
+    vec<DoesNotExistInJava> avec;
+};
+
+union UnionDoesNotExistInJava {
+    uint32_t a;
+    uint64_t b;
 };
