@@ -214,7 +214,8 @@ status_t AST::lookupTypes() {
                 if (nextType == nullptr) {
                     std::cerr << "ERROR: Failed to lookup type '"
                               << nextRef->getLookupFqName().string() << "' at "
-                              << nextRef->location() << "\n";
+                              << nextRef->location()
+                              << " (is it imported and spelled correctly?)\n";
                     return UNKNOWN_ERROR;
                 }
                 nextRef->set(nextType);
@@ -387,21 +388,19 @@ bool AST::importFQName(const FQName& fqName) {
         }
 
         for (const auto& subFQName : packageInterfaces) {
-            addToImportedNamesGranular(subFQName);
-
             // Do not enforce restrictions on imports.
             AST* ast = mCoordinator->parse(subFQName, &mImportedASTs, Coordinator::Enforce::NONE);
             if (ast == nullptr) {
                 return false;
             }
+            addToImportedNamesGranular(subFQName);
+
             // all previous single type imports are ignored.
             mImportedTypes.erase(ast);
         }
 
         return true;
     }
-
-    addToImportedNamesGranular(fqName);
 
     // cases like android.hardware.foo@1.0::IFoo.Internal
     //            android.hardware.foo@1.0::Abc.Internal
@@ -424,6 +423,7 @@ bool AST::importFQName(const FQName& fqName) {
             // cases like android.hardware.foo@1.0::IFoo
             //        and android.hardware.foo@1.0::types
             mImportedTypes.erase(importAST);
+            addToImportedNamesGranular(fqName);
             return true;
         }
 
@@ -436,6 +436,7 @@ bool AST::importFQName(const FQName& fqName) {
         }
         // will automatically create a set if it does not exist
         mImportedTypes[importAST].insert(match);
+        addToImportedNamesGranular(fqName);
         return true;
     }
 
@@ -454,6 +455,7 @@ bool AST::importFQName(const FQName& fqName) {
         }
         // will automatically create a set if not exist
         mImportedTypes[importAST].insert(match);
+        addToImportedNamesGranular(fqName);
         return true;
     }
 
@@ -825,6 +827,9 @@ void AST::getAllImportedNamesGranular(std::set<FQName> *allImportNames) const {
             // re-export anything it itself imported.
             AST* ast = mCoordinator->parse(
                     fqName, nullptr /* imported */, Coordinator::Enforce::NONE);
+
+            // imported names must have already been validated
+            CHECK(ast != nullptr) << fqName.string();
 
             ast->addDefinedTypes(allImportNames);
         } else {

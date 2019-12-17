@@ -531,6 +531,17 @@ static status_t generateAdapterMainSource(const FQName& packageFQName,
         return err;
     }
 
+    // b/146223994: parse all interfaces
+    // - causes files to get read (filling out dep file)
+    // - avoid creating successful output for broken files
+    for (const FQName& fqName : packageInterfaces) {
+        AST* ast = coordinator->parse(fqName);
+        if (ast == nullptr) {
+            fprintf(stderr, "ERROR: Could not parse %s. Aborting.\n", fqName.string().c_str());
+            return UNKNOWN_ERROR;
+        }
+    }
+
     Formatter out = getFormatter();
     if (!out.isValid()) {
         return UNKNOWN_ERROR;
@@ -800,11 +811,9 @@ bool validateForSource(const FQName& fqName, const Coordinator* coordinator,
 
         if (!isJavaCompatible) {
             fprintf(stderr,
-                    "ERROR: %s is not Java compatible. The Java backend"
-                    " does NOT support union types nor native handles. "
-                    "In addition, vectors of arrays are limited to at most "
-                    "one-dimensional arrays and vectors of {vectors,interfaces} are"
-                    " not supported.\n",
+                    "ERROR: %s is not Java compatible. The Java backend does NOT support union "
+                    "types. In addition, vectors of arrays are limited to at most one-dimensional "
+                    "arrays and vectors of {vectors,interfaces,memory} are not supported.\n",
                     fqName.string().c_str());
             return false;
         }

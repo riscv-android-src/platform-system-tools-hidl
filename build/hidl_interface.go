@@ -685,7 +685,7 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 		mctx.CreateModule(java.LibraryFactory, &javaProperties{
 			Name:        proptools.StringPtr(name.javaConstantsName()),
 			Defaults:    []string{"hidl-java-module-defaults"},
-			Sdk_version: proptools.StringPtr("core_platform"),
+			Sdk_version: proptools.StringPtr("core_current"),
 			Srcs:        []string{":" + name.javaConstantsSourcesName()},
 		})
 	}
@@ -839,6 +839,19 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 
 			// TODO(b/126244142)
 			Cflags: []string{"-Wno-unused-variable"},
+		})
+
+		specDependencies := append(cppDependencies, name.string())
+		mctx.CreateModule(cc.FuzzFactory, &ccProperties{
+			Name:        proptools.StringPtr(name.vtsFuzzerName()),
+			Defaults:    []string{"vts_proto_fuzzer_default"},
+			Shared_libs: []string{name.vtsDriverName()},
+			Cflags: []string{
+				"-DSTATIC_TARGET_FQ_NAME=" + name.string(),
+				"-DSTATIC_SPEC_DATA=" + strings.Join(specDependencies, ":"),
+			},
+		}, &fuzzProperties{
+			Data: wrap(":", specDependencies, "-vts.spec"),
 		})
 	}
 
