@@ -30,7 +30,8 @@ import (
 )
 
 var (
-	hidlInterfaceSuffix = "_interface"
+	hidlInterfaceSuffix       = "_interface"
+	hidlMetadataSingletonName = "hidl_metadata_json"
 
 	pctx = android.NewPackageContext("android/hidl")
 
@@ -102,21 +103,32 @@ func init() {
 	android.RegisterModuleType("hidl_interface", hidlInterfaceFactory)
 	android.RegisterSingletonType("all_hidl_lints", allHidlLintsFactory)
 	android.RegisterMakeVarsProvider(pctx, makeVarsProvider)
-	android.RegisterSingletonType("hidl_interfaces_metadata", hidlInterfacesMetadataSingletonFactory)
+	android.RegisterModuleType("hidl_interfaces_metadata", hidlInterfacesMetadataSingletonFactory)
 	pctx.Import("android/soong/android")
 }
 
-func hidlInterfacesMetadataSingletonFactory() android.Singleton {
-	return &hidlInterfacesMetadataSingleton{}
+func hidlInterfacesMetadataSingletonFactory() android.Module {
+	i := &hidlInterfacesMetadataSingleton{}
+	android.InitAndroidModule(i)
+	return i
 }
 
 type hidlInterfacesMetadataSingleton struct {
+	android.ModuleBase
+
 	inheritanceHierarchyPath android.OutputPath
 }
 
-func (m *hidlInterfacesMetadataSingleton) GenerateBuildActions(ctx android.SingletonContext) {
+var _ android.OutputFileProducer = (*hidlInterfacesMetadataSingleton)(nil)
+
+func (m *hidlInterfacesMetadataSingleton) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+	if m.Name() != hidlMetadataSingletonName {
+		ctx.PropertyErrorf("name", "must be %s", hidlMetadataSingletonName)
+		return
+	}
+
 	var inheritanceHierarchyOutputs android.Paths
-	ctx.VisitAllModules(func(m android.Module) {
+	ctx.VisitDirectDeps(func(m android.Module) {
 		if t, ok := m.(*hidlGenRule); ok {
 			if t.properties.Language == "inheritance-hierarchy" {
 				inheritanceHierarchyOutputs = append(inheritanceHierarchyOutputs, t.genOutputs.Paths()...)
@@ -136,8 +148,12 @@ func (m *hidlInterfacesMetadataSingleton) GenerateBuildActions(ctx android.Singl
 	})
 }
 
-func (m *hidlInterfacesMetadataSingleton) MakeVars(ctx android.MakeVarsContext) {
-	ctx.Strict("HIDL_INHERITANCE_HIERARCHY", m.inheritanceHierarchyPath.String())
+func (m *hidlInterfacesMetadataSingleton) OutputFiles(tag string) (android.Paths, error) {
+	if tag != "" {
+		return nil, fmt.Errorf("unsupported tag %q", tag)
+	}
+
+	return android.Paths{m.inheritanceHierarchyPath}, nil
 }
 
 func allHidlLintsFactory() android.Singleton {
@@ -331,6 +347,8 @@ func (g *hidlGenRule) DepsMutator(ctx android.BottomUpMutatorContext) {
 	ctx.AddDependency(ctx.Module(), nil, g.properties.FqName+hidlInterfaceSuffix)
 	ctx.AddDependency(ctx.Module(), nil, wrap("", g.properties.Interfaces, hidlInterfaceSuffix)...)
 	ctx.AddDependency(ctx.Module(), nil, g.properties.Root)
+
+	ctx.AddReverseDependency(ctx.Module(), nil, hidlMetadataSingletonName)
 }
 
 func hidlGenFactory() android.Module {
@@ -667,7 +685,7 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 		mctx.CreateModule(java.LibraryFactory, &javaProperties{
 			Name:        proptools.StringPtr(name.javaConstantsName()),
 			Defaults:    []string{"hidl-java-module-defaults"},
-			Sdk_version: proptools.StringPtr("core_platform"),
+			Sdk_version: proptools.StringPtr("core_current"),
 			Srcs:        []string{":" + name.javaConstantsSourcesName()},
 		})
 	}
@@ -822,6 +840,22 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 			// TODO(b/126244142)
 			Cflags: []string{"-Wno-unused-variable"},
 		})
+
+		specDependencies := append(cppDependencies, name.string())
+		mctx.CreateModule(cc.FuzzFactory, &ccProperties{
+			Name:        proptools.StringPtr(name.vtsFuzzerName()),
+			Defaults:    []string{"vts_proto_fuzzer_default"},
+			Shared_libs: []string{name.vtsDriverName()},
+			Cflags: []string{
+				"-DSTATIC_TARGET_FQ_NAME=" + name.string(),
+				"-DSTATIC_SPEC_DATA=" + strings.Join(specDependencies, ":"),
+			},
+		}, &fuzzProperties{
+			Data: wrap(":", specDependencies, "-vts.spec"),
+			Fuzz_config: &fuzzConfig{
+				Fuzz_on_haiku_device: proptools.BoolPtr(isFuzzerEnabled(name.vtsFuzzerName())),
+			},
+		})
 	}
 
 	mctx.CreateModule(hidlGenFactory, &nameProperties{
@@ -882,9 +916,7 @@ var doubleLoadablePackageNames = []string{
 	"android.hardware.cas@1.0",
 	"android.hardware.cas.native@1.0",
 	"android.hardware.configstore@",
-	"android.hardware.drm@1.0",
-	"android.hardware.drm@1.1",
-	"android.hardware.drm@1.2",
+	"android.hardware.drm@",
 	"android.hardware.graphics.allocator@",
 	"android.hardware.graphics.bufferqueue@",
 	"android.hardware.media@",
@@ -918,6 +950,19 @@ func isCorePackage(name string) bool {
 		}
 	}
 	return false
+}
+
+var fuzzerPackageNameBlacklist = []string{
+	"android.hardware.keymaster@", // to avoid deleteAllKeys()
+}
+
+func isFuzzerEnabled(name string) bool {
+	for _, pkgname := range fuzzerPackageNameBlacklist {
+		if strings.HasPrefix(name, pkgname) {
+			return false
+		}
+	}
+	return true
 }
 
 // TODO(b/126383715): centralize this logic/support filtering in core VTS build

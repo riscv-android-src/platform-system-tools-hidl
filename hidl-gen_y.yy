@@ -32,7 +32,6 @@
 #include "VectorType.h"
 
 #include "hidl-gen_y-helpers.h"
-#include "hidl-gen_y.h"
 
 #include <android-base/logging.h>
 #include <hidl-util/FQName.h>
@@ -221,16 +220,17 @@ bool isValidTypeName(const std::string& identifier, std::string *errorMsg) {
 %lex-param { void* scanner }
 %lex-param { android::AST* const ast }
 %lex-param { android::Scope** const scope }
-%pure-parser
 %glr-parser
 %skeleton "glr.cc"
 
 %expect-rr 0
-%error-verbose
+%define parse.error verbose
+%locations
 
 %verbose
 %debug
 
+%token<str> MULTILINE_COMMENT "multiline comment"
 %token<str> DOC_COMMENT "doc comment"
 
 %token<void> ENUM "keyword `enum`"
@@ -279,7 +279,7 @@ bool isValidTypeName(const std::string& identifier, std::string *errorMsg) {
 
 %token '#'
 
-%type<docComment> doc_comments ignore_doc_comments
+%type<docComment> doc_comment doc_comments ignore_doc_comments
 
 %type<str> error_stmt error
 %type<str> package
@@ -349,11 +349,16 @@ program
     | package declarations ignore_doc_comments
     ;
 
+doc_comment
+    : DOC_COMMENT { $$ = new DocComment($1, convertYYLoc(@1, ast), CommentType::DOC_MULTILINE); }
+    | MULTILINE_COMMENT { $$ = new DocComment($1, convertYYLoc(@1, ast), CommentType::MULTILINE); }
+    ;
+
 doc_comments
-    : DOC_COMMENT { $$ = new DocComment($1, convertYYLoc(@1, ast)); }
-    | doc_comments DOC_COMMENT
+    : doc_comment { $$ = $1; }
+    | doc_comments doc_comment
       {
-        $1->merge(new DocComment($2, convertYYLoc(@2, ast)));
+        $1->merge($2);
         $$ = $1;
       }
     ;

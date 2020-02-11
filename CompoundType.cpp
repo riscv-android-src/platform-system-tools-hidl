@@ -777,8 +777,8 @@ void CompoundType::emitTypeForwardDeclaration(Formatter& out) const {
 void CompoundType::emitPackageTypeDeclarations(Formatter& out) const {
     Scope::emitPackageTypeDeclarations(out);
 
-    out << "static inline std::string toString(" << getCppArgumentType()
-        << (mFields.empty() ? "" : " o") << ");\n";
+    out << "static inline std::string toString(" << getCppArgumentType() << " o);\n";
+    out << "static inline void PrintTo(" << getCppArgumentType() << " o, ::std::ostream*);\n";
 
     if (canCheckEquality()) {
         out << "static inline bool operator==("
@@ -851,6 +851,9 @@ void CompoundType::emitPackageTypeHeaderDefinitions(Formatter& out) const {
         out << "os += \"}\"; return os;\n";
     }).endl().endl();
 
+    out << "static inline void PrintTo(" << getCppArgumentType() << " o, ::std::ostream* os) ";
+    out.block([&] { out << "*os << toString(o);\n"; }).endl().endl();
+
     if (canCheckEquality()) {
         out << "static inline bool operator==(" << getCppArgumentType() << " "
             << (mFields.empty() ? "/* lhs */" : "lhs") << ", " << getCppArgumentType() << " "
@@ -912,6 +915,8 @@ void CompoundType::emitPackageTypeHeaderDefinitions(Formatter& out) const {
 }
 
 void CompoundType::emitPackageHwDeclarations(Formatter& out) const {
+    Scope::emitPackageHwDeclarations(out);
+
     if (needsEmbeddedReadWrite()) {
         out << "::android::status_t readEmbeddedFromParcel(\n";
 
@@ -1378,7 +1383,7 @@ void CompoundType::emitJavaTypeDeclarations(Formatter& out, bool atTopLevel) con
             << discriminatorStorageType
             << " getDiscriminator() { return hidl_d; }\n\n";
 
-    } else {
+    } else if (mStyle == STYLE_STRUCT) {
         for (const auto& field : mFields) {
             field->emitDocComment(out);
 
@@ -1387,6 +1392,8 @@ void CompoundType::emitJavaTypeDeclarations(Formatter& out, bool atTopLevel) con
         }
 
         out << "\n";
+    } else {
+        LOG(FATAL) << "Java output doesn't support " << mStyle;
     }
 
     ////////////////////////////////////////////////////////////////////////////

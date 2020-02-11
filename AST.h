@@ -74,15 +74,16 @@ struct AST {
 
     // Look up local identifier.
     // It could be plain identifier or enum value as described by lookupEnumValue.
-    LocalIdentifier* lookupLocalIdentifier(const Reference<LocalIdentifier>& ref, Scope* scope);
+    LocalIdentifier* lookupLocalIdentifier(const Reference<LocalIdentifier>& ref,
+                                           const Scope* scope);
 
     // Look up an enum value by "FQName:valueName".
-    EnumValue* lookupEnumValue(const FQName& fqName, std::string* errorMsg, Scope* scope);
+    EnumValue* lookupEnumValue(const FQName& fqName, std::string* errorMsg, const Scope* scope);
 
     // Look up a type by FQName, "pure" names, i.e. those without package
     // or version are first looked up in the current scope chain.
     // After that lookup proceeds to imports.
-    Type* lookupType(const FQName& fqName, Scope* scope);
+    Type* lookupType(const FQName& fqName, const Scope* scope);
 
     void addImportedAST(AST *ast);
 
@@ -282,7 +283,7 @@ struct AST {
     bool importFQName(const FQName& fqName);
 
     // Helper functions for lookupType.
-    Type* lookupTypeLocally(const FQName& fqName, Scope* scope);
+    Type* lookupTypeLocally(const FQName& fqName, const Scope* scope);
     status_t lookupAutofilledType(const FQName &fqName, Type **returnedType);
     Type *lookupTypeFromImports(const FQName &fqName);
 
@@ -290,11 +291,6 @@ struct AST {
     // return the associated type and fill in the full "matchingName".
     // Only types defined in this very AST are considered.
     Type *findDefinedType(const FQName &fqName, FQName *matchingName) const;
-
-    void getPackageComponents(std::vector<std::string> *components) const;
-
-    void getPackageAndVersionComponents(
-            std::vector<std::string> *components, bool cpp_compatible) const;
 
     std::string makeHeaderGuard(const std::string &baseName,
                                 bool indicateGenerated = true) const;

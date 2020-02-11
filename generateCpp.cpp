@@ -35,16 +35,6 @@
 
 namespace android {
 
-void AST::getPackageComponents(
-        std::vector<std::string> *components) const {
-    mPackage.getPackageComponents(components);
-}
-
-void AST::getPackageAndVersionComponents(
-        std::vector<std::string> *components, bool cpp_compatible) const {
-    mPackage.getPackageAndVersionComponents(components, cpp_compatible);
-}
-
 std::string AST::makeHeaderGuard(const std::string &baseName,
                                  bool indicateGenerated) const {
     std::string guard;
@@ -68,8 +58,8 @@ void AST::generateCppPackageInclude(
 
     out << "#include <";
 
-    std::vector<std::string> components;
-    package.getPackageAndVersionComponents(&components, false /* cpp_compatible */);
+    std::vector<std::string> components =
+            package.getPackageAndVersionComponents(false /* sanitized */);
 
     for (const auto &component : components) {
         out << component << "/";
@@ -80,9 +70,8 @@ void AST::generateCppPackageInclude(
 }
 
 void AST::enterLeaveNamespace(Formatter &out, bool enter) const {
-    std::vector<std::string> packageComponents;
-    getPackageAndVersionComponents(
-            &packageComponents, true /* cpp_compatible */);
+    std::vector<std::string> packageComponents =
+            mPackage.getPackageAndVersionComponents(true /* sanitized */);
 
     if (enter) {
         for (const auto &component : packageComponents) {
@@ -285,7 +274,7 @@ void AST::generateInterfaceHeader(Formatter& out) const {
         DocComment("Type tag for use in template logic that indicates this is a 'pure' class.",
                    HIDL_LOCATION_HERE)
                 .emit(out);
-        generateCppTag(out, "android::hardware::details::i_tag");
+        generateCppTag(out, "::android::hardware::details::i_tag");
 
         DocComment("Fully qualified interface name: \"" + iface->fqName().string() + "\"",
                    HIDL_LOCATION_HERE)
@@ -697,7 +686,7 @@ void AST::generateStubHeader(Formatter& out) const {
     DocComment("Type tag for use in template logic that indicates this is a 'native' class.",
                HIDL_LOCATION_HERE)
             .emit(out);
-    generateCppTag(out, "android::hardware::details::bnhw_tag");
+    generateCppTag(out, "::android::hardware::details::bnhw_tag");
 
     out << "::android::sp<" << iface->definedName() << "> getImpl() { return _hidl_mImpl; }\n";
 
@@ -765,10 +754,6 @@ void AST::generateProxyHeader(Formatter& out) const {
 
     out << "#include <hidl/HidlTransportSupport.h>\n\n";
 
-    std::vector<std::string> packageComponents;
-    getPackageAndVersionComponents(
-            &packageComponents, false /* cpp_compatible */);
-
     generateCppPackageInclude(out, mPackage, iface->getHwName());
     out << "\n";
 
@@ -789,7 +774,7 @@ void AST::generateProxyHeader(Formatter& out) const {
     DocComment("Type tag for use in template logic that indicates this is a 'proxy' class.",
                HIDL_LOCATION_HERE)
             .emit(out);
-    generateCppTag(out, "android::hardware::details::bphw_tag");
+    generateCppTag(out, "::android::hardware::details::bphw_tag");
 
     out << "virtual bool isRemote() const override { return true; }\n\n";
 
@@ -1530,7 +1515,11 @@ void AST::generateStaticStubMethodSource(Formatter& out, const FQName& fqName,
                 "_hidl_reply",
                 true, /* parcelObjIsPointer */
                 false, /* isReader */
-                Type::ErrorMode_Ignore);
+                Type::ErrorMode_Goto);
+
+        out.unindent();
+        out << "_hidl_error:\n";
+        out.indent();
 
         generateCppInstrumentationCall(
                 out,
@@ -1538,6 +1527,7 @@ void AST::generateStaticStubMethodSource(Formatter& out, const FQName& fqName,
                 method,
             superInterface);
 
+        out << "if (_hidl_err != ::android::OK) { return _hidl_err; }\n";
         out << "_hidl_cb(*_hidl_reply);\n";
     } else {
         if (returnsValue) {
@@ -1587,8 +1577,14 @@ void AST::generateStaticStubMethodSource(Formatter& out, const FQName& fqName,
                         true /* parcelObjIsPointer */,
                         arg,
                         false /* reader */,
-                        Type::ErrorMode_Ignore,
+                        Type::ErrorMode_Goto,
                         true /* addPrefixToName */);
+            }
+
+            if (!method->results().empty()) {
+                out.unindent();
+                out << "_hidl_error:\n";
+                out.indent();
             }
 
             generateCppInstrumentationCall(
@@ -1597,6 +1593,7 @@ void AST::generateStaticStubMethodSource(Formatter& out, const FQName& fqName,
                     method,
                     superInterface);
 
+            out << "if (_hidl_err != ::android::OK) { return; }\n";
             out << "_hidl_cb(*_hidl_reply);\n";
 
             out.unindent();
@@ -1649,10 +1646,6 @@ void AST::generatePassthroughHeader(Formatter& out) const {
     out << "#ifndef " << guard << "\n";
     out << "#define " << guard << "\n\n";
 
-    std::vector<std::string> packageComponents;
-    getPackageAndVersionComponents(
-            &packageComponents, false /* cpp_compatible */);
-
     out << "#include <android-base/macros.h>\n";
     out << "#include <cutils/trace.h>\n";
     out << "#include <future>\n";
@@ -1675,7 +1668,7 @@ void AST::generatePassthroughHeader(Formatter& out) const {
 
     out.endl();
     generateTemplatizationLink(out);
-    generateCppTag(out, "android::hardware::details::bs_tag");
+    generateCppTag(out, "::android::hardware::details::bs_tag");
 
     generateMethods(out, [&](const Method* method, const Interface* superInterface) {
         generatePassthroughMethod(out, method, superInterface);

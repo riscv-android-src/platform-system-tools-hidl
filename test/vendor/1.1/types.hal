@@ -14,24 +14,15 @@
  * limitations under the License.
  */
 
-package hidl2aidl@1.0;
+package hidl.tests.vendor@1.1;
 
-struct Outer {
-    struct Inner {
-        uint8_t a;
-    } inner;
+import hidl.tests.vendor@1.0::A.B;
+import hidl.tests.vendor@1.0::A;
+
+struct C {
+    vec<B> b;
 };
 
-struct OverrideMe {
-    uint8_t a;
-};
-
-struct OnlyIn10 {
-    string str;
-};
-
-enum Value : uint32_t {
-    A = 1 + 2,
-    B = 7,
-    C,
+struct D {
+    vec<A.B> b;
 };
