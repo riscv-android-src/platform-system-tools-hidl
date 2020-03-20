@@ -464,6 +464,10 @@ type hidlInterfaceProperties struct {
 
 	// example: -randroid.hardware:hardware/interfaces
 	Full_root_option string `blueprint:"mutated"`
+
+	// Whether this interface library should be installed on product partition.
+	// TODO(b/150902910): remove, since this should be an inherited property.
+	Product_specific *bool
 }
 
 type hidlInterface struct {
@@ -573,6 +577,9 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 	shouldGenerateJava := proptools.BoolDefault(i.properties.Gen_java, true)
 	shouldGenerateJavaConstants := i.properties.Gen_java_constants
 	shouldGenerateVts := shouldGenerateLibrary && proptools.BoolDefault(i.properties.Gen_vts, true)
+
+	// TODO(b/150902910): re-enable VTS builds for product things
+	shouldGenerateVts = shouldGenerateVts && !proptools.Bool(i.properties.Product_specific)
 
 	var libraryIfExists []string
 	if shouldGenerateLibrary {
@@ -852,6 +859,9 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 			},
 		}, &fuzzProperties{
 			Data: wrap(":", specDependencies, "-vts.spec"),
+			Fuzz_config: &fuzzConfig{
+				Fuzz_on_haiku_device: proptools.BoolPtr(isFuzzerEnabled(name.vtsFuzzerName())),
+			},
 		})
 	}
 
@@ -913,9 +923,7 @@ var doubleLoadablePackageNames = []string{
 	"android.hardware.cas@1.0",
 	"android.hardware.cas.native@1.0",
 	"android.hardware.configstore@",
-	"android.hardware.drm@1.0",
-	"android.hardware.drm@1.1",
-	"android.hardware.drm@1.2",
+	"android.hardware.drm@",
 	"android.hardware.graphics.allocator@",
 	"android.hardware.graphics.bufferqueue@",
 	"android.hardware.media@",
@@ -948,6 +956,22 @@ func isCorePackage(name string) bool {
 			return true
 		}
 	}
+	return false
+}
+
+var fuzzerPackageNameBlacklist = []string{
+	"android.hardware.keymaster@", // to avoid deleteAllKeys()
+	// Same-process HALs are always opened in the same process as their client.
+	// So stability guarantees don't apply to them, e.g. it's OK to crash on
+	// NULL input from client. Disable corresponding fuzzers as they create too
+	// much noise.
+	"android.hardware.graphics.mapper@",
+	"android.hardware.renderscript@",
+	"android.hidl.memory@",
+}
+
+func isFuzzerEnabled(name string) bool {
+	// TODO(151338797): re-enable fuzzers
 	return false
 }
 
