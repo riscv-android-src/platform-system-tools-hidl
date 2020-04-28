@@ -21,7 +21,7 @@
 
 namespace android {
 
-PointerType::PointerType(Scope* parent) : Type(parent, "pointer") {}
+PointerType::PointerType(Scope* parent) : Type(parent) {}
 
 bool PointerType::isPointer() const {
     return true;

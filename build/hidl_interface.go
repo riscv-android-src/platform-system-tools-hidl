@@ -30,16 +30,13 @@ import (
 )
 
 var (
-	hidlInterfaceSuffix       = "_interface"
-	hidlMetadataSingletonName = "hidl_metadata_json"
+	hidlInterfaceSuffix = "_interface"
 
 	pctx = android.NewPackageContext("android/hidl")
 
-	hidl             = pctx.HostBinToolVariable("hidl", "hidl-gen")
-	vtsc             = pctx.HostBinToolVariable("vtsc", "vtsc")
-	hidlLint         = pctx.HostBinToolVariable("lint", "hidl-lint")
-	soong_zip        = pctx.HostBinToolVariable("soong_zip", "soong_zip")
-	intermediatesDir = pctx.IntermediatesPathVariable("intermediatesDir", "")
+	hidl      = pctx.HostBinToolVariable("hidl", "hidl-gen")
+	vtsc      = pctx.HostBinToolVariable("vtsc", "vtsc")
+	soong_zip = pctx.HostBinToolVariable("soong_zip", "soong_zip")
 
 	hidlRule = pctx.StaticRule("hidlRule", blueprint.RuleParams{
 		Depfile:     "${depfile}",
@@ -64,136 +61,11 @@ var (
 		CommandDeps: []string{"${vtsc}"},
 		Description: "VTS ${mode} ${type}: ${in} => ${out}",
 	}, "mode", "type", "inputDir", "genDir", "packagePath")
-
-	lintRule = pctx.StaticRule("lintRule", blueprint.RuleParams{
-		Command:     "rm -f ${output} && touch ${output} && ${lint} -j -e -R -p . ${roots} ${fqName} > ${output}",
-		CommandDeps: []string{"${lint}"},
-		Description: "hidl-lint ${fqName}: ${out}",
-	}, "output", "roots", "fqName")
-
-	zipLintRule = pctx.StaticRule("zipLintRule", blueprint.RuleParams{
-		Command:     "rm -f ${output} && ${soong_zip} -o ${output} -C ${intermediatesDir} ${files}",
-		CommandDeps: []string{"${soong_zip}"},
-		Description: "Zipping hidl-lints into ${output}",
-	}, "output", "files")
-
-	inheritanceHierarchyRule = pctx.StaticRule("inheritanceHierarchyRule", blueprint.RuleParams{
-		Command:     "rm -f ${out} && ${hidl} -L inheritance-hierarchy ${roots} ${fqInterface} > ${out}",
-		CommandDeps: []string{"${hidl}"},
-		Description: "HIDL inheritance hierarchy: ${fqInterface} => ${out}",
-	}, "roots", "fqInterface")
-
-	joinJsonObjectsToArrayRule = pctx.StaticRule("joinJsonObjectsToArrayRule", blueprint.RuleParams{
-		Rspfile:        "$out.rsp",
-		RspfileContent: "$files",
-		Command: "rm -rf ${out} && " +
-			// Start the output array with an opening bracket.
-			"echo '[' >> ${out} && " +
-			// Append each input file and a comma to the output.
-			"for file in $$(cat ${out}.rsp); do " +
-			"cat $$file >> ${out}; echo ',' >> ${out}; " +
-			"done && " +
-			// Remove the last comma, replacing it with the closing bracket.
-			"sed -i '$$d' ${out} && echo ']' >> ${out}",
-		Description: "Joining JSON objects into array ${out}",
-	}, "files")
 )
 
 func init() {
 	android.RegisterModuleType("hidl_interface", hidlInterfaceFactory)
-	android.RegisterSingletonType("all_hidl_lints", allHidlLintsFactory)
 	android.RegisterMakeVarsProvider(pctx, makeVarsProvider)
-	android.RegisterModuleType("hidl_interfaces_metadata", hidlInterfacesMetadataSingletonFactory)
-	pctx.Import("android/soong/android")
-}
-
-func hidlInterfacesMetadataSingletonFactory() android.Module {
-	i := &hidlInterfacesMetadataSingleton{}
-	android.InitAndroidModule(i)
-	return i
-}
-
-type hidlInterfacesMetadataSingleton struct {
-	android.ModuleBase
-
-	inheritanceHierarchyPath android.OutputPath
-}
-
-var _ android.OutputFileProducer = (*hidlInterfacesMetadataSingleton)(nil)
-
-func (m *hidlInterfacesMetadataSingleton) GenerateAndroidBuildActions(ctx android.ModuleContext) {
-	if m.Name() != hidlMetadataSingletonName {
-		ctx.PropertyErrorf("name", "must be %s", hidlMetadataSingletonName)
-		return
-	}
-
-	var inheritanceHierarchyOutputs android.Paths
-	ctx.VisitDirectDeps(func(m android.Module) {
-		if t, ok := m.(*hidlGenRule); ok {
-			if t.properties.Language == "inheritance-hierarchy" {
-				inheritanceHierarchyOutputs = append(inheritanceHierarchyOutputs, t.genOutputs.Paths()...)
-			}
-		}
-	})
-
-	m.inheritanceHierarchyPath = android.PathForIntermediates(ctx, "hidl_inheritance_hierarchy.json")
-
-	ctx.Build(pctx, android.BuildParams{
-		Rule:   joinJsonObjectsToArrayRule,
-		Inputs: inheritanceHierarchyOutputs,
-		Output: m.inheritanceHierarchyPath,
-		Args: map[string]string{
-			"files": strings.Join(inheritanceHierarchyOutputs.Strings(), " "),
-		},
-	})
-}
-
-func (m *hidlInterfacesMetadataSingleton) OutputFiles(tag string) (android.Paths, error) {
-	if tag != "" {
-		return nil, fmt.Errorf("unsupported tag %q", tag)
-	}
-
-	return android.Paths{m.inheritanceHierarchyPath}, nil
-}
-
-func allHidlLintsFactory() android.Singleton {
-	return &allHidlLintsSingleton{}
-}
-
-type allHidlLintsSingleton struct {
-	outPath string
-}
-
-func (m *allHidlLintsSingleton) GenerateBuildActions(ctx android.SingletonContext) {
-	var hidlLintOutputs android.Paths
-	ctx.VisitAllModules(func(m android.Module) {
-		if t, ok := m.(*hidlGenRule); ok {
-			if t.properties.Language == "lint" {
-				if len(t.genOutputs) == 1 {
-					hidlLintOutputs = append(hidlLintOutputs, t.genOutputs[0])
-				} else {
-					panic("-hidl-lint target was not configured correctly")
-				}
-			}
-		}
-	})
-
-	outPath := android.PathForIntermediates(ctx, "hidl-lint.zip")
-	m.outPath = outPath.String()
-
-	ctx.Build(pctx, android.BuildParams{
-		Rule:   zipLintRule,
-		Inputs: hidlLintOutputs,
-		Output: outPath,
-		Args: map[string]string{
-			"output": outPath.String(),
-			"files":  strings.Join(wrap("-f ", hidlLintOutputs.Strings(), ""), " "),
-		},
-	})
-}
-
-func (m *allHidlLintsSingleton) MakeVars(ctx android.MakeVarsContext) {
-	ctx.Strict("ALL_HIDL_LINTS_ZIP", m.outPath)
 }
 
 type hidlGenProperties struct {
@@ -225,24 +97,8 @@ func (g *hidlGenRule) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		g.genInputs = append(g.genInputs, android.PathForModuleSrc(ctx, input))
 	}
 
-	var interfaces []string
-	for _, src := range g.properties.Inputs {
-		if strings.HasSuffix(src, ".hal") && strings.HasPrefix(src, "I") {
-			interfaces = append(interfaces, strings.TrimSuffix(src, ".hal"))
-		}
-	}
-
-	switch g.properties.Language {
-	case "lint":
-		g.genOutputs = append(g.genOutputs, android.PathForModuleGen(ctx, "lint.json"))
-	case "inheritance-hierarchy":
-		for _, intf := range interfaces {
-			g.genOutputs = append(g.genOutputs, android.PathForModuleGen(ctx, intf+"_inheritance_hierarchy.json"))
-		}
-	default:
-		for _, output := range g.properties.Outputs {
-			g.genOutputs = append(g.genOutputs, android.PathForModuleGen(ctx, output))
-		}
+	for _, output := range g.properties.Outputs {
+		g.genOutputs = append(g.genOutputs, android.PathForModuleGen(ctx, output))
 	}
 
 	if g.properties.Language == "vts" && isVtsSpecPackage(ctx.ModuleName()) {
@@ -281,37 +137,6 @@ func (g *hidlGenRule) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		rule = hidlSrcJarRule
 	}
 
-	if g.properties.Language == "lint" {
-		ctx.Build(pctx, android.BuildParams{
-			Rule:   lintRule,
-			Inputs: inputs,
-			Output: g.genOutputs[0],
-			Args: map[string]string{
-				"output": g.genOutputs[0].String(),
-				"fqName": g.properties.FqName,
-				"roots":  strings.Join(fullRootOptions, " "),
-			},
-		})
-
-		return
-	}
-
-	if g.properties.Language == "inheritance-hierarchy" {
-		for i, intf := range interfaces {
-			ctx.Build(pctx, android.BuildParams{
-				Rule:   inheritanceHierarchyRule,
-				Inputs: inputs,
-				Output: g.genOutputs[i],
-				Args: map[string]string{
-					"fqInterface": g.properties.FqName + "::" + intf,
-					"roots":       strings.Join(fullRootOptions, " "),
-				},
-			})
-		}
-
-		return
-	}
-
 	ctx.ModuleBuild(pctx, android.ModuleBuildParams{
 		Rule:            rule,
 		Inputs:          inputs,
@@ -347,8 +172,6 @@ func (g *hidlGenRule) DepsMutator(ctx android.BottomUpMutatorContext) {
 	ctx.AddDependency(ctx.Module(), nil, g.properties.FqName+hidlInterfaceSuffix)
 	ctx.AddDependency(ctx.Module(), nil, wrap("", g.properties.Interfaces, hidlInterfaceSuffix)...)
 	ctx.AddDependency(ctx.Module(), nil, g.properties.Root)
-
-	ctx.AddReverseDependency(ctx.Module(), nil, hidlMetadataSingletonName)
 }
 
 func hidlGenFactory() android.Module {
@@ -466,10 +289,45 @@ type hidlInterfaceProperties struct {
 	Full_root_option string `blueprint:"mutated"`
 }
 
+// TODO(b/119771576): These properties are shared by all Android modules, and we are specifically
+// calling these out to be copied to every create module. However, if a new property is added, it
+// could break things because this code has no way to know about that.
+type manuallyInheritCommonProperties struct {
+	Enabled          *bool
+	Compile_multilib *string
+	Target           struct {
+		Host struct {
+			Compile_multilib *string
+		}
+		Android struct {
+			Compile_multilib *string
+		}
+	}
+	Proprietary               *bool
+	Owner                     *string
+	Vendor                    *bool
+	Soc_specific              *bool
+	Device_specific           *bool
+	Product_specific          *bool
+	Product_services_specific *bool
+	Recovery                  *bool
+	Init_rc                   []string
+	Vintf_fragments           []string
+	Required                  []string
+	Notice                    *string
+	Dist                      struct {
+		Targets []string
+		Dest    *string
+		Dir     *string
+		Suffix  *string
+	}
+}
+
 type hidlInterface struct {
 	android.ModuleBase
 
-	properties hidlInterfaceProperties
+	properties              hidlInterfaceProperties
+	inheritCommonProperties manuallyInheritCommonProperties
 }
 
 func processSources(mctx android.LoadHookContext, srcs []string) ([]string, []string, bool) {
@@ -547,8 +405,7 @@ func hidlInterfaceMutator(mctx android.LoadHookContext, i *hidlInterface) {
 
 hidl_package_root {
 name: "%s",
-// if you want to require <some path>/current.txt for interface versioning
-use_current: true,
+path: "<some path>",
 }
 
 This corresponds to the "-r%s:<some path>" option that would be passed into hidl-gen.`,
@@ -580,12 +437,12 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 	}
 
 	// TODO(b/69002743): remove filegroups
-	mctx.CreateModule(android.FileGroupFactory, &fileGroupProperties{
+	mctx.CreateModule(android.ModuleFactoryAdaptor(android.FileGroupFactory), &fileGroupProperties{
 		Name: proptools.StringPtr(name.fileGroupName()),
 		Srcs: i.properties.Srcs,
-	})
+	}, &i.inheritCommonProperties)
 
-	mctx.CreateModule(hidlGenFactory, &nameProperties{
+	mctx.CreateModule(android.ModuleFactoryAdaptor(hidlGenFactory), &nameProperties{
 		Name: proptools.StringPtr(name.sourcesName()),
 	}, &hidlGenProperties{
 		Language:   "c++-sources",
@@ -594,8 +451,8 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 		Interfaces: i.properties.Interfaces,
 		Inputs:     i.properties.Srcs,
 		Outputs:    concat(wrap(name.dir(), interfaces, "All.cpp"), wrap(name.dir(), types, ".cpp")),
-	})
-	mctx.CreateModule(hidlGenFactory, &nameProperties{
+	}, &i.inheritCommonProperties)
+	mctx.CreateModule(android.ModuleFactoryAdaptor(hidlGenFactory), &nameProperties{
 		Name: proptools.StringPtr(name.headersName()),
 	}, &hidlGenProperties{
 		Language:   "c++-headers",
@@ -610,12 +467,11 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 			wrap(name.dir()+"IHw", interfaces, ".h"),
 			wrap(name.dir(), types, ".h"),
 			wrap(name.dir()+"hw", types, ".h")),
-	})
+	}, &i.inheritCommonProperties)
 
 	if shouldGenerateLibrary {
-		mctx.CreateModule(cc.LibraryFactory, &ccProperties{
+		mctx.CreateModule(android.ModuleFactoryAdaptor(cc.LibraryFactory), &ccProperties{
 			Name:               proptools.StringPtr(name.string()),
-			Host_supported:     proptools.BoolPtr(true),
 			Recovery_available: proptools.BoolPtr(true),
 			Vendor_available:   proptools.BoolPtr(true),
 			Double_loadable:    proptools.BoolPtr(isDoubleLoadable(name.string())),
@@ -624,20 +480,24 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 			Generated_headers:  []string{name.headersName()},
 			Shared_libs: concat(cppDependencies, []string{
 				"libhidlbase",
+				"libhidltransport",
+				"libhwbinder",
 				"liblog",
 				"libutils",
 				"libcutils",
 			}),
 			Export_shared_lib_headers: concat(cppDependencies, []string{
 				"libhidlbase",
+				"libhidltransport",
+				"libhwbinder",
 				"libutils",
 			}),
 			Export_generated_headers: []string{name.headersName()},
-		}, &i.properties.VndkProperties)
+		}, &i.properties.VndkProperties, &i.inheritCommonProperties)
 	}
 
 	if shouldGenerateJava {
-		mctx.CreateModule(hidlGenFactory, &nameProperties{
+		mctx.CreateModule(android.ModuleFactoryAdaptor(hidlGenFactory), &nameProperties{
 			Name: proptools.StringPtr(name.javaSourcesName()),
 		}, &hidlGenProperties{
 			Language:   "java",
@@ -646,12 +506,13 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 			Interfaces: i.properties.Interfaces,
 			Inputs:     i.properties.Srcs,
 			Outputs:    []string{"srcs.srcjar"},
-		})
+		}, &i.inheritCommonProperties)
 
 		commonJavaProperties := javaProperties{
-			Defaults:    []string{"hidl-java-module-defaults"},
-			Installable: proptools.BoolPtr(true),
-			Srcs:        []string{":" + name.javaSourcesName()},
+			Defaults:          []string{"hidl-java-module-defaults"},
+			No_framework_libs: proptools.BoolPtr(true),
+			Installable:       proptools.BoolPtr(true),
+			Srcs:              []string{":" + name.javaSourcesName()},
 
 			// This should ideally be system_current, but android.hidl.base-V1.0-java is used
 			// to build framework, which is used to build system_current.  Use core_current
@@ -661,18 +522,18 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 			Libs:        []string{"hwbinder.stubs"},
 		}
 
-		mctx.CreateModule(java.LibraryFactory, &javaProperties{
+		mctx.CreateModule(android.ModuleFactoryAdaptor(java.LibraryFactory), &javaProperties{
 			Name:        proptools.StringPtr(name.javaName()),
 			Static_libs: javaDependencies,
-		}, &commonJavaProperties)
-		mctx.CreateModule(java.LibraryFactory, &javaProperties{
+		}, &i.inheritCommonProperties, &commonJavaProperties)
+		mctx.CreateModule(android.ModuleFactoryAdaptor(java.LibraryFactory), &javaProperties{
 			Name: proptools.StringPtr(name.javaSharedName()),
 			Libs: javaDependencies,
-		}, &commonJavaProperties)
+		}, &i.inheritCommonProperties, &commonJavaProperties)
 	}
 
 	if shouldGenerateJavaConstants {
-		mctx.CreateModule(hidlGenFactory, &nameProperties{
+		mctx.CreateModule(android.ModuleFactoryAdaptor(hidlGenFactory), &nameProperties{
 			Name: proptools.StringPtr(name.javaConstantsSourcesName()),
 		}, &hidlGenProperties{
 			Language:   "java-constants",
@@ -681,16 +542,16 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 			Interfaces: i.properties.Interfaces,
 			Inputs:     i.properties.Srcs,
 			Outputs:    []string{name.sanitizedDir() + "Constants.java"},
-		})
-		mctx.CreateModule(java.LibraryFactory, &javaProperties{
-			Name:        proptools.StringPtr(name.javaConstantsName()),
-			Defaults:    []string{"hidl-java-module-defaults"},
-			Sdk_version: proptools.StringPtr("core_platform"),
-			Srcs:        []string{":" + name.javaConstantsSourcesName()},
-		})
+		}, &i.inheritCommonProperties)
+		mctx.CreateModule(android.ModuleFactoryAdaptor(java.LibraryFactory), &javaProperties{
+			Name:              proptools.StringPtr(name.javaConstantsName()),
+			Defaults:          []string{"hidl-java-module-defaults"},
+			No_framework_libs: proptools.BoolPtr(true),
+			Srcs:              []string{":" + name.javaConstantsSourcesName()},
+		}, &i.inheritCommonProperties)
 	}
 
-	mctx.CreateModule(hidlGenFactory, &nameProperties{
+	mctx.CreateModule(android.ModuleFactoryAdaptor(hidlGenFactory), &nameProperties{
 		Name: proptools.StringPtr(name.adapterHelperSourcesName()),
 	}, &hidlGenProperties{
 		Language:   "c++-adapter-sources",
@@ -699,8 +560,8 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 		Interfaces: i.properties.Interfaces,
 		Inputs:     i.properties.Srcs,
 		Outputs:    wrap(name.dir()+"A", concat(interfaces, types), ".cpp"),
-	})
-	mctx.CreateModule(hidlGenFactory, &nameProperties{
+	}, &i.inheritCommonProperties)
+	mctx.CreateModule(android.ModuleFactoryAdaptor(hidlGenFactory), &nameProperties{
 		Name: proptools.StringPtr(name.adapterHelperHeadersName()),
 	}, &hidlGenProperties{
 		Language:   "c++-adapter-headers",
@@ -709,9 +570,9 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 		Interfaces: i.properties.Interfaces,
 		Inputs:     i.properties.Srcs,
 		Outputs:    wrap(name.dir()+"A", concat(interfaces, types), ".h"),
-	})
+	}, &i.inheritCommonProperties)
 
-	mctx.CreateModule(cc.LibraryFactory, &ccProperties{
+	mctx.CreateModule(android.ModuleFactoryAdaptor(cc.LibraryFactory), &ccProperties{
 		Name:              proptools.StringPtr(name.adapterHelperName()),
 		Vendor_available:  proptools.BoolPtr(true),
 		Defaults:          []string{"hidl-module-defaults"},
@@ -721,6 +582,8 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 			"libbase",
 			"libcutils",
 			"libhidlbase",
+			"libhidltransport",
+			"libhwbinder",
 			"liblog",
 			"libutils",
 		},
@@ -729,14 +592,15 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 		}, wrap("", dependencies, "-adapter-helper"), cppDependencies, libraryIfExists),
 		Export_shared_lib_headers: []string{
 			"libhidlbase",
+			"libhidltransport",
 		},
 		Export_static_lib_headers: concat([]string{
 			"libhidladapter",
 		}, wrap("", dependencies, "-adapter-helper"), cppDependencies, libraryIfExists),
 		Export_generated_headers: []string{name.adapterHelperHeadersName()},
 		Group_static_libs:        proptools.BoolPtr(true),
-	})
-	mctx.CreateModule(hidlGenFactory, &nameProperties{
+	}, &i.inheritCommonProperties)
+	mctx.CreateModule(android.ModuleFactoryAdaptor(hidlGenFactory), &nameProperties{
 		Name: proptools.StringPtr(name.adapterSourcesName()),
 	}, &hidlGenProperties{
 		Language:   "c++-adapter-main",
@@ -745,14 +609,16 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 		Interfaces: i.properties.Interfaces,
 		Inputs:     i.properties.Srcs,
 		Outputs:    []string{"main.cpp"},
-	})
-	mctx.CreateModule(cc.TestFactory, &ccProperties{
+	}, &i.inheritCommonProperties)
+	mctx.CreateModule(android.ModuleFactoryAdaptor(cc.TestFactory), &ccProperties{
 		Name:              proptools.StringPtr(name.adapterName()),
 		Generated_sources: []string{name.adapterSourcesName()},
 		Shared_libs: []string{
 			"libbase",
 			"libcutils",
 			"libhidlbase",
+			"libhidltransport",
+			"libhwbinder",
 			"liblog",
 			"libutils",
 		},
@@ -761,12 +627,12 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 			name.adapterHelperName(),
 		}, wrap("", dependencies, "-adapter-helper"), cppDependencies, libraryIfExists),
 		Group_static_libs: proptools.BoolPtr(true),
-	})
+	}, &i.inheritCommonProperties)
 
 	if shouldGenerateVts {
 		vtsSpecs := concat(wrap(name.dir(), interfaces, ".vts"), wrap(name.dir(), types, ".vts"))
 
-		mctx.CreateModule(hidlGenFactory, &nameProperties{
+		mctx.CreateModule(android.ModuleFactoryAdaptor(hidlGenFactory), &nameProperties{
 			Name: proptools.StringPtr(name.vtsSpecName()),
 		}, &hidlGenProperties{
 			Language:   "vts",
@@ -775,9 +641,9 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 			Interfaces: i.properties.Interfaces,
 			Inputs:     i.properties.Srcs,
 			Outputs:    vtsSpecs,
-		})
+		}, &i.inheritCommonProperties)
 
-		mctx.CreateModule(vtscFactory, &nameProperties{
+		mctx.CreateModule(android.ModuleFactoryAdaptor(vtscFactory), &nameProperties{
 			Name: proptools.StringPtr(name.vtsDriverSourcesName()),
 		}, &vtscProperties{
 			Mode:        "DRIVER",
@@ -785,8 +651,8 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 			SpecName:    name.vtsSpecName(),
 			Outputs:     wrap("", vtsSpecs, ".cpp"),
 			PackagePath: name.dir(),
-		})
-		mctx.CreateModule(vtscFactory, &nameProperties{
+		}, &i.inheritCommonProperties)
+		mctx.CreateModule(android.ModuleFactoryAdaptor(vtscFactory), &nameProperties{
 			Name: proptools.StringPtr(name.vtsDriverHeadersName()),
 		}, &vtscProperties{
 			Mode:        "DRIVER",
@@ -794,8 +660,8 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 			SpecName:    name.vtsSpecName(),
 			Outputs:     wrap("", vtsSpecs, ".h"),
 			PackagePath: name.dir(),
-		})
-		mctx.CreateModule(cc.LibraryFactory, &ccProperties{
+		}, &i.inheritCommonProperties)
+		mctx.CreateModule(android.ModuleFactoryAdaptor(cc.LibraryFactory), &ccProperties{
 			Name:                      proptools.StringPtr(name.vtsDriverName()),
 			Defaults:                  []string{"VtsHalDriverDefaults"},
 			Generated_sources:         []string{name.vtsDriverSourcesName()},
@@ -807,9 +673,9 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 
 			// TODO(b/126244142)
 			Cflags: []string{"-Wno-unused-variable"},
-		})
+		}, &i.inheritCommonProperties)
 
-		mctx.CreateModule(vtscFactory, &nameProperties{
+		mctx.CreateModule(android.ModuleFactoryAdaptor(vtscFactory), &nameProperties{
 			Name: proptools.StringPtr(name.vtsProfilerSourcesName()),
 		}, &vtscProperties{
 			Mode:        "PROFILER",
@@ -817,8 +683,8 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 			SpecName:    name.vtsSpecName(),
 			Outputs:     wrap("", vtsSpecs, ".cpp"),
 			PackagePath: name.dir(),
-		})
-		mctx.CreateModule(vtscFactory, &nameProperties{
+		}, &i.inheritCommonProperties)
+		mctx.CreateModule(android.ModuleFactoryAdaptor(vtscFactory), &nameProperties{
 			Name: proptools.StringPtr(name.vtsProfilerHeadersName()),
 		}, &vtscProperties{
 			Mode:        "PROFILER",
@@ -826,8 +692,8 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 			SpecName:    name.vtsSpecName(),
 			Outputs:     wrap("", vtsSpecs, ".h"),
 			PackagePath: name.dir(),
-		})
-		mctx.CreateModule(cc.LibraryFactory, &ccProperties{
+		}, &i.inheritCommonProperties)
+		mctx.CreateModule(android.ModuleFactoryAdaptor(cc.LibraryFactory), &ccProperties{
 			Name:                      proptools.StringPtr(name.vtsProfilerName()),
 			Defaults:                  []string{"VtsHalProfilerDefaults"},
 			Generated_sources:         []string{name.vtsProfilerSourcesName()},
@@ -839,29 +705,7 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 
 			// TODO(b/126244142)
 			Cflags: []string{"-Wno-unused-variable"},
-		})
-	}
-
-	mctx.CreateModule(hidlGenFactory, &nameProperties{
-		Name: proptools.StringPtr(name.lintName()),
-	}, &hidlGenProperties{
-		Language:   "lint",
-		FqName:     name.string(),
-		Root:       i.properties.Root,
-		Interfaces: i.properties.Interfaces,
-		Inputs:     i.properties.Srcs,
-	})
-
-	if i.ModuleBase.ExportedToMake() {
-		mctx.CreateModule(hidlGenFactory, &nameProperties{
-			Name: proptools.StringPtr(name.inheritanceHierarchyName()),
-		}, &hidlGenProperties{
-			Language:   "inheritance-hierarchy",
-			FqName:     name.string(),
-			Root:       i.properties.Root,
-			Interfaces: i.properties.Interfaces,
-			Inputs:     i.properties.Srcs,
-		})
+		}, &i.inheritCommonProperties)
 	}
 }
 
@@ -889,6 +733,7 @@ func (h *hidlInterface) DepsMutator(ctx android.BottomUpMutatorContext) {
 func hidlInterfaceFactory() android.Module {
 	i := &hidlInterface{}
 	i.AddProperties(&i.properties)
+	i.AddProperties(&i.inheritCommonProperties)
 	android.InitAndroidModule(i)
 	android.AddLoadHook(i, func(ctx android.LoadHookContext) { hidlInterfaceMutator(ctx, i) })
 
@@ -923,7 +768,7 @@ func isDoubleLoadable(name string) bool {
 	return false
 }
 
-// packages in libhidlbase
+// packages in libhidltransport
 var coreDependencyPackageNames = []string{
 	"android.hidl.base@",
 	"android.hidl.manager@",

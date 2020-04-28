@@ -28,7 +28,6 @@ type ccProperties struct {
 	Name                      *string
 	Owner                     *string
 	Defaults                  []string
-	Host_supported            *bool
 	Vendor_available          *bool
 	Recovery_available        *bool
 	Generated_sources         []string
@@ -44,12 +43,13 @@ type ccProperties struct {
 }
 
 type javaProperties struct {
-	Name        *string
-	Owner       *string
-	Defaults    []string
-	Installable *bool
-	Sdk_version *string
-	Srcs        []string
-	Libs        []string
-	Static_libs []string
+	Name              *string
+	Owner             *string
+	Defaults          []string
+	No_framework_libs *bool
+	Installable       *bool
+	Sdk_version       *string
+	Srcs              []string
+	Libs              []string
+	Static_libs       []string
 }

@@ -18,7 +18,6 @@
 
 #define INTERFACE_H_
 
-#include <string>
 #include <vector>
 
 #include <hidl-hash/Hash.h>
@@ -35,13 +34,13 @@ struct InterfaceAndMethod;
 struct Interface : public Scope {
     const static std::unique_ptr<ConstantExpression> FLAG_ONE_WAY;
 
-    Interface(const std::string& localName, const FQName& fullName, const Location& location,
+    Interface(const char* localName, const FQName& fullName, const Location& location,
               Scope* parent, const Reference<Type>& superType, const Hash* fileHash);
 
     const Hash* getFileHash() const;
 
-    void addUserDefinedMethod(Method* method);
-    bool addAllReservedMethods(const std::map<std::string, Method*>& allReservedMethods);
+    bool addMethod(Method *method);
+    bool addAllReservedMethods();
 
     bool isElidableType() const override;
     bool isInterface() const override;
@@ -97,6 +96,8 @@ struct Interface : public Scope {
     std::vector<const Reference<Type>*> getReferences() const override;
     std::vector<const Reference<Type>*> getStrongReferences() const override;
 
+    std::vector<const ConstantExpression*> getConstantExpressions() const override;
+
     status_t resolveInheritance() override;
     status_t validate() const override;
     status_t validateUniqueNames() const;
@@ -109,8 +110,6 @@ struct Interface : public Scope {
             bool parcelObjIsPointer,
             bool isReader,
             ErrorMode mode) const override;
-
-    void emitHidlDefinition(Formatter& out) const override;
 
     void emitPackageTypeDeclarations(Formatter& out) const override;
     void emitPackageTypeHeaderDefinitions(Formatter& out) const override;
@@ -127,6 +126,8 @@ struct Interface : public Scope {
 
     void emitVtsAttributeDeclaration(Formatter& out) const;
     void emitVtsMethodDeclaration(Formatter& out, bool isInherited) const;
+
+    bool hasOnewayMethods() const;
 
     bool deepIsJavaCompatible(std::unordered_set<const Type*>* visited) const override;
 
