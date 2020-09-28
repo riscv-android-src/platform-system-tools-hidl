@@ -295,6 +295,12 @@ TEST_F(HidlTest, BazSomeOtherBaseMethodTest) {
 }
 
 TEST_F(HidlTest, SomeOtherBaseMethodInvalidString) {
+    Return<bool> isJava = baz->isJava();
+    ASSERT_TRUE(isJava.isOk());
+    if (!isJava) {
+        GTEST_SKIP() << "Test only applies to Java";
+    }
+
     IBase::Foo foo {
         .y = {
             .s = "\xff",
@@ -771,7 +777,7 @@ TEST_F(HidlTest, TwowayMethodOnewayEnabledTest) {
     EXPECT_EQ(::android::OK, request.writeInterfaceToken(IBaz::descriptor));
     EXPECT_EQ(::android::OK, request.writeInt64(1234));
     // IBaz::doThatAndReturnSomething is two-way but we call it using FLAG_ONEWAY.
-    EXPECT_EQ(::android::OK, binder->transact(18 /*doThatAndReturnSomething*/, request, &reply,
+    EXPECT_EQ(::android::OK, binder->transact(19 /*doThatAndReturnSomething*/, request, &reply,
                                               IBinder::FLAG_ONEWAY));
 
     ::android::hardware::Status status;
@@ -782,6 +788,9 @@ TEST_F(HidlTest, TwowayMethodOnewayEnabledTest) {
 }
 
 TEST_F(HidlTest, OnewayMethodOnewayDisabledTest) {
+    Return<bool> isJava = baz->isJava();
+    ASSERT_TRUE(isJava.isOk());
+
     using ::android::hardware::IBinder;
     using ::android::hardware::Parcel;
 
@@ -795,8 +804,10 @@ TEST_F(HidlTest, OnewayMethodOnewayDisabledTest) {
             // Expect UNKNOWN_ERROR because the JNI class JHwBinder always sets
             // the reply to UNKNOWN_ERROR for two-way transactions if the
             // transaction itself did not send a reply.
-            ::android::UNKNOWN_ERROR,
-            binder->transact(17 /*doThis*/, request, &reply, 0 /* Not FLAG_ONEWAY */));
+            //
+            // C++ does not specifically check this error case.
+            (isJava ? ::android::UNKNOWN_ERROR : 0),
+            binder->transact(18 /*doThis*/, request, &reply, 0 /* Not FLAG_ONEWAY */));
 
     EXPECT_OK(baz->ping());  // still works
 }
@@ -1190,6 +1201,47 @@ TEST_F(HidlTest, SafeUnionEqualityTest) {
             }));
         }));
     }));
+}
+
+template <typename T, size_t start, size_t end>
+void expectRangeEqual(const T* t, uint8_t byte) {
+    static_assert(start < sizeof(T));
+    static_assert(end <= sizeof(T));
+
+    const uint8_t* buf = reinterpret_cast<const uint8_t*>(t);
+
+    for (size_t i = start; i < end; i++) {
+        EXPECT_EQ(byte, buf[i]) << i;
+    }
+}
+
+TEST_F(HidlTest, UninitTest) {
+    Return<bool> isJava = baz->isJava();
+    ASSERT_TRUE(isJava.isOk());
+    if (!isJava) {
+        GTEST_SKIP() << "Test only applies to Java";
+    }
+
+    IBase::Foo foo;
+    foo.x = 1;
+    foo.y = {0, ""};
+
+    static_assert(offsetof(IBase::Foo, x) == 0);
+    static_assert(sizeof(foo.x) == 4);
+    static_assert(offsetof(IBase::Foo, aaa) == 8);
+
+    uint8_t* buf = reinterpret_cast<uint8_t*>(&foo);
+    memset(buf + 4, 0xFF, 4);
+
+    // this should not affect the result for remote Java (but would for remote C++)
+    expectRangeEqual<IBase::Foo, 4, 8>(&foo, 0xFF);
+
+    // run many times, if this error case is hit, it will only be hit
+    // sometimes.
+    for (size_t i = 0; i < 100; i++) {
+        EXPECT_OK(baz->someOtherBaseMethod(
+                foo, [](const IBase::Foo& foo) { expectRangeEqual<IBase::Foo, 4, 8>(&foo, 0); }));
+    }
 }
 
 int main(int argc, char **argv) {

@@ -142,8 +142,10 @@ static bool shouldWarnStatusType(const std::string& typeName) {
     return false;
 }
 
-void AidlHelper::emitAidl(const Interface& interface, const Coordinator& coordinator) {
-    Formatter out = getFileWithHeader(interface, coordinator);
+void AidlHelper::emitAidl(
+        const Interface& interface, const Coordinator& coordinator,
+        const std::map<const NamedType*, const ProcessedCompoundType>& processedTypes) {
+    Formatter out = getFileWithHeader(interface, coordinator, processedTypes);
 
     interface.emitDocComment(out);
     if (interface.superType() && interface.superType()->fqName() != gIBaseFqName) {
@@ -202,11 +204,6 @@ void AidlHelper::emitAidl(const Interface& interface, const Coordinator& coordin
                          << " since a newer alternative is available.";
                  });
         if (!supersededMethods.empty()) out << "\n\n";
-
-        // Emit latest types defined for this interface only
-        for (auto const& [name, typeWithVersion] : latestTypeForBaseName) {
-            emitAidl(*typeWithVersion.node, coordinator);
-        }
 
         // Emit latest methods defined for this interface
         out.join(latestMethodForBaseName.begin(), latestMethodForBaseName.end(), "\n",

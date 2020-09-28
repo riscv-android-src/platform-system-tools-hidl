@@ -25,6 +25,7 @@
 
 #include "AidlHelper.h"
 #include "ArrayType.h"
+#include "CompoundType.h"
 #include "Coordinator.h"
 #include "Interface.h"
 #include "Method.h"
@@ -88,7 +89,9 @@ void AidlHelper::importLocallyReferencedType(const Type& type, std::set<std::str
 // it has to encode the logic in the rest of hidl2aidl. It would be better
 // if we could iterate over the AIDL structure which has already been
 // processed.
-void AidlHelper::emitFileHeader(Formatter& out, const NamedType& type) {
+void AidlHelper::emitFileHeader(
+        Formatter& out, const NamedType& type,
+        const std::map<const NamedType*, const ProcessedCompoundType>& processedTypes) {
     out << "// FIXME: license file if you have one\n\n";
     out << "package " << getAidlPackage(type.fqName()) << ";\n\n";
 
@@ -113,6 +116,19 @@ void AidlHelper::emitFileHeader(Formatter& out, const NamedType& type) {
                 importLocallyReferencedType(*ref->get(), &imports);
             }
         }
+    } else if (type.isCompoundType()) {
+        // Get all of the imports for the flattened compound type that may
+        // include additional fields and subtypes from older versions
+        const auto& it = processedTypes.find(&type);
+        CHECK(it != processedTypes.end()) << "Failed to find " << type.fullName();
+        const ProcessedCompoundType& processedType = it->second;
+
+        for (const auto& field : processedType.fields) {
+            importLocallyReferencedType(*field.field->get(), &imports);
+        }
+        for (const auto& subType : processedType.subTypes) {
+            importLocallyReferencedType(*subType, &imports);
+        }
     } else {
         for (const Reference<Type>* ref : type.getReferences()) {
             if (ref->get()->definedName() == type.fqName().name()) {
@@ -132,14 +148,63 @@ void AidlHelper::emitFileHeader(Formatter& out, const NamedType& type) {
     }
 }
 
-Formatter AidlHelper::getFileWithHeader(const NamedType& namedType,
-                                        const Coordinator& coordinator) {
+Formatter AidlHelper::getFileWithHeader(
+        const NamedType& namedType, const Coordinator& coordinator,
+        const std::map<const NamedType*, const ProcessedCompoundType>& processedTypes) {
     std::string aidlPackage = getAidlPackage(namedType.fqName());
     Formatter out = coordinator.getFormatter(namedType.fqName(), Coordinator::Location::DIRECT,
                                              base::Join(base::Split(aidlPackage, "."), "/") + "/" +
                                                      getAidlName(namedType.fqName()) + ".aidl");
-    emitFileHeader(out, namedType);
+    emitFileHeader(out, namedType, processedTypes);
     return out;
+}
+
+void AidlHelper::processCompoundType(const CompoundType& compoundType,
+                                     ProcessedCompoundType* processedType) {
+    // Gather all of the subtypes defined in this type
+    for (const NamedType* subType : compoundType.getSubTypes()) {
+        processedType->subTypes.insert(subType);
+    }
+    std::pair<size_t, size_t> version = compoundType.fqName().hasVersion()
+                                                ? compoundType.fqName().getVersion()
+                                                : std::pair<size_t, size_t>{0, 0};
+    for (const NamedReference<Type>* field : compoundType.getFields()) {
+        // Check for references to an older version of itself
+        if (field->get()->typeName() == compoundType.typeName()) {
+            processCompoundType(static_cast<const CompoundType&>(*field->get()), processedType);
+        } else {
+            // Handle duplicate field names. Keep only the most recent definitions.
+            auto it = std::find_if(processedType->fields.begin(), processedType->fields.end(),
+                                   [field](auto& processedField) {
+                                       return processedField.field->name() == field->name();
+                                   });
+            if (it != processedType->fields.end()) {
+                AidlHelper::notes()
+                        << "Found conflicting field name \"" << field->name()
+                        << "\" in different versions of " << compoundType.fqName().name() << ". ";
+
+                if (version.first > it->version.first ||
+                    (version.first == it->version.first && version.second > it->version.second)) {
+                    AidlHelper::notes()
+                            << "Keeping " << field->get()->typeName() << " from " << version.first
+                            << "." << version.second << " and discarding "
+                            << (it->field)->get()->typeName() << " from " << it->version.first
+                            << "." << it->version.second << ".\n";
+
+                    it->field = field;
+                    it->version = version;
+                } else {
+                    AidlHelper::notes()
+                            << "Keeping " << (it->field)->get()->typeName() << " from "
+                            << it->version.first << "." << it->version.second << " and discarding "
+                            << field->get()->typeName() << " from " << version.first << "."
+                            << version.second << ".\n";
+                }
+            } else {
+                processedType->fields.push_back({field, field->name(), version});
+            }
+        }
+    }
 }
 
 }  // namespace android
