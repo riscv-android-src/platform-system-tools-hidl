@@ -14,34 +14,25 @@
  * limitations under the License.
  */
 
-package hidl2aidl.test@1.2;
+package hidl2aidl.test@1.1;
 
-import @1.1::OnlyIn11;
-import @1.1::NameCollision;
-import android.hidl.safe_union@1.0::Monostate;
+import @1.2::IFoo;
 
-struct NameCollision {
-    @1.1::NameCollision reference;
+/**
+ * The types in this package are not supported in the Java backend of HIDL
+ */
+interface IFoo extends @1.2::IFoo {
+    ImportedStruct(Outer outer);
 
-    string c;
-};
+    /**
+     * @param mem memory
+     */
+    useMemory(memory mem);
+    shouldImportCorrectTypes() generates (vec<OnlyIn11> lst);
 
-union UnionFoo {
-    int64_t a;
-    int8_t b;
-    @1.1::OnlyIn11 c;
-};
+    removedOutput() generates (string status);
 
-safe_union SafeUnionBar {
-    Monostate noInit;
-    int8_t a;
-    uint64_t b;
-    struct InnerStructBar {
-      int8_t x;
-      int8_t z;
-    } innerStructBar;
-    @1.1::OnlyIn11 c;
-    string d;
-    float e;
-    double f;
+    fmqMethod(fmq_sync<bool> sync, fmq_unsync<int32_t> unsync) generates (pointer t);
+
+    retVec(int8_t a) generates (vec<string> b);
 };
