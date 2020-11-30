@@ -15,9 +15,8 @@
 // with such a backward incompatible change, it has a high risk of breaking
 // later when a module using the interface is updated, e.g., Mainline modules.
 
-package hidl2aidl;
+package hidl2aidl.test;
 @VintfStability
-parcelable IFooBigStruct {
-  byte type;
-  byte value;
+parcelable OuterInner {
+  byte a;
 }

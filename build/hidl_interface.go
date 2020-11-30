@@ -279,8 +279,6 @@ func (g *hidlGenRule) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 			if t.requireFrozen() {
 				extraOptions = append(extraOptions, "-F")
 			}
-		default:
-			panic(fmt.Sprintf("Unrecognized hidlGenProperties dependency: %T", t))
 		}
 	})
 
@@ -507,10 +505,6 @@ type hidlInterfaceProperties struct {
 	// example: -randroid.hardware:hardware/interfaces
 	Full_root_option string `blueprint:"mutated"`
 
-	// Whether this interface library should be installed on product partition.
-	// TODO(b/150902910): remove, since this should be an inherited property.
-	Product_specific *bool
-
 	// List of APEX modules this interface can be used in.
 	//
 	// WARNING: HIDL is not fully supported in APEX since VINTF currently doesn't
@@ -633,8 +627,10 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 	shouldGenerateJavaConstants := i.properties.Gen_java_constants
 	shouldGenerateVts := shouldGenerateLibrary && proptools.BoolDefault(i.properties.Gen_vts, true)
 
-	// TODO(b/150902910): re-enable VTS builds for product things
-	shouldGenerateVts = shouldGenerateVts && !proptools.Bool(i.properties.Product_specific)
+	var productAvailable *bool
+	if !mctx.ProductSpecific() {
+		productAvailable = proptools.BoolPtr(true)
+	}
 
 	var libraryIfExists []string
 	if shouldGenerateLibrary {
@@ -680,6 +676,7 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 			Host_supported:     proptools.BoolPtr(true),
 			Recovery_available: proptools.BoolPtr(true),
 			Vendor_available:   proptools.BoolPtr(true),
+			Product_available:  productAvailable,
 			Double_loadable:    proptools.BoolPtr(isDoubleLoadable(name.string())),
 			Defaults:           []string{"hidl-module-defaults"},
 			Generated_sources:  []string{name.sourcesName()},
@@ -780,6 +777,7 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 	mctx.CreateModule(cc.LibraryFactory, &ccProperties{
 		Name:              proptools.StringPtr(name.adapterHelperName()),
 		Vendor_available:  proptools.BoolPtr(true),
+		Product_available: productAvailable,
 		Defaults:          []string{"hidl-module-defaults"},
 		Generated_sources: []string{name.adapterHelperSourcesName()},
 		Generated_headers: []string{name.adapterHelperHeadersName()},
@@ -863,6 +861,7 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 		})
 		mctx.CreateModule(cc.LibraryFactory, &ccProperties{
 			Name:                      proptools.StringPtr(name.vtsDriverName()),
+			Product_available:         productAvailable,
 			Defaults:                  []string{"VtsHalDriverDefaults"},
 			Generated_sources:         []string{name.vtsDriverSourcesName()},
 			Generated_headers:         []string{name.vtsDriverHeadersName()},
@@ -895,6 +894,7 @@ This corresponds to the "-r%s:<some path>" option that would be passed into hidl
 		})
 		mctx.CreateModule(cc.LibraryFactory, &ccProperties{
 			Name:                      proptools.StringPtr(name.vtsProfilerName()),
+			Product_available:         productAvailable,
 			Defaults:                  []string{"VtsHalProfilerDefaults"},
 			Generated_sources:         []string{name.vtsProfilerSourcesName()},
 			Generated_headers:         []string{name.vtsProfilerHeadersName()},
@@ -951,11 +951,13 @@ func (h *hidlInterface) Name() string {
 func (h *hidlInterface) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	visited := false
 	ctx.VisitDirectDeps(func(dep android.Module) {
-		if visited {
-			panic("internal error, multiple dependencies found but only one added")
+		if r, ok := dep.(*hidlPackageRoot); ok {
+			if visited {
+				panic("internal error, multiple dependencies found but only one added")
+			}
+			visited = true
+			h.properties.Full_root_option = r.getFullPackageRoot()
 		}
-		visited = true
-		h.properties.Full_root_option = dep.(*hidlPackageRoot).getFullPackageRoot()
 	})
 	if !visited {
 		panic("internal error, no dependencies found but dependency added")
