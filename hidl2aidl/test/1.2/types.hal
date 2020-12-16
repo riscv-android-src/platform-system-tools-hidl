@@ -18,6 +18,7 @@ package hidl2aidl.test@1.2;
 
 import @1.1::OnlyIn11;
 import @1.1::NameCollision;
+import @1.1::Value;
 import android.hidl.safe_union@1.0::Monostate;
 
 struct NameCollision {
@@ -32,6 +33,13 @@ union UnionFoo {
     @1.1::OnlyIn11 c;
 };
 
+enum FooFlag : uint32_t {
+    NONE = 0x0,
+    FIRST = 0x1 << 0,
+    SECOND = 0x1 << 1,
+    THIRD = 0x1 << 2,
+};
+
 safe_union SafeUnionBar {
     Monostate noInit;
     int8_t a;
@@ -44,4 +52,21 @@ safe_union SafeUnionBar {
     string d;
     float e;
     double f;
+    bitfield<FooFlag> g;
+    @1.1::Value h;
 };
+
+struct ArrayFoo {
+    int8_t[12] a;
+    uint32_t[12] b;
+    @1.1::Value[12] c;
+    string[2] d;
+};
+
+struct VectorFoo {
+    vec<int8_t> a;
+    vec<uint32_t> b;
+    vec<@1.1::Value> c;
+    vec<string> d;
+};
+
