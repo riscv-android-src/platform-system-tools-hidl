@@ -41,7 +41,11 @@
 namespace android {
 
 const std::unique_ptr<ConstantExpression> Interface::FLAG_ONE_WAY =
-    std::make_unique<LiteralConstantExpression>(ScalarType::KIND_UINT32, hardware::IBinder::FLAG_ONEWAY, "oneway");
+        std::make_unique<LiteralConstantExpression>(ScalarType::KIND_UINT32,
+                                                    hardware::IBinder::FLAG_ONEWAY, "oneway");
+const std::unique_ptr<ConstantExpression> Interface::FLAG_CLEAR_BUF =
+        std::make_unique<LiteralConstantExpression>(ScalarType::KIND_UINT32,
+                                                    hardware::IBinder::FLAG_CLEAR_BUF, "clear buf");
 
 Interface::Interface(const std::string& localName, const FQName& fullName, const Location& location,
                      Scope* parent, const Reference<Type>& superType, const Hash* fileHash)
@@ -486,9 +490,6 @@ status_t Interface::validate() const {
     err = validateUniqueNames();
     if (err != OK) return err;
 
-    err = validateAnnotations();
-    if (err != OK) return err;
-
     return Scope::validate();
 }
 
@@ -532,6 +533,19 @@ status_t Interface::validateUniqueNames() const {
 }
 
 status_t Interface::validateAnnotations() const {
+    for (const Annotation* annotation : annotations()) {
+        const std::string name = annotation->name();
+
+        if (name == "SensitiveData") {
+            continue;
+        }
+
+        std::cerr << "WARNING: Unrecognized annotation '" << name << "' for " << typeName()
+                  << " at " << location() << ". Only @SensitiveData is supported." << std::endl;
+        // ideally would be error, but we don't want to break downstream
+        // return UNKNOWN_ERROR;
+    }
+
     for (const Method* method : methods()) {
         for (const Annotation* annotation : method->annotations()) {
             const std::string name = annotation->name();
@@ -541,12 +555,13 @@ status_t Interface::validateAnnotations() const {
             }
 
             std::cerr << "ERROR: Unrecognized annotation '" << name
-                      << "' for method: " << method->name() << ". An annotation should be one of: "
-                      << "entry, exit, callflow." << std::endl;
+                      << "' for method: " << method->name() << " at " << method->location()
+                      << ". An annotation should be one of: "
+                      << "@entry, @exit, or @callflow." << std::endl;
             return UNKNOWN_ERROR;
         }
     }
-    return OK;
+    return OK;  // not calling superclass which is more restrictive
 }
 
 bool Interface::addAllReservedMethods(const std::map<std::string, Method*>& allReservedMethods) {
@@ -581,6 +596,16 @@ bool Interface::addAllReservedMethods(const std::map<std::string, Method*>& allR
         this->mReservedMethods.push_back(pair.second);
     }
     return true;
+}
+
+bool Interface::hasSensitiveDataAnnotation() const {
+    for (const auto& annotation : annotations()) {
+        if (annotation->name() == "SensitiveData") {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 const Interface* Interface::superType() const {
@@ -936,6 +961,10 @@ void Interface::emitVtsAttributeType(Formatter& out) const {
 }
 
 bool Interface::deepIsJavaCompatible(std::unordered_set<const Type*>* visited) const {
+    if (hasSensitiveDataAnnotation()) {
+        return false;
+    }
+
     if (superType() != nullptr && !superType()->isJavaCompatible(visited)) {
         return false;
     }

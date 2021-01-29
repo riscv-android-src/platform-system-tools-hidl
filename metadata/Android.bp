@@ -10,6 +10,7 @@ cc_library {
 
 cc_library_headers {
     name: "libhidlmetadata_headers",
+    product_available: true,
     recovery_available: true,
     host_supported: true,
     export_include_dirs: ["include"],
@@ -18,6 +19,9 @@ cc_library_headers {
 cc_test_host {
     name: "hidl_metadata_test",
     srcs: ["test.cpp"],
+    test_options: {
+        unit_test: true,
+    },
     static_libs: [
         "libhidlmetadata",
         "libgmock",
