@@ -25,12 +25,20 @@ struct NameCollision {
     @1.1::NameCollision reference;
 
     string c;
+    int16_t d;
 };
 
 union UnionFoo {
     int64_t a;
     int8_t b;
     @1.1::OnlyIn11 c;
+};
+
+enum FooFlag : uint32_t {
+    NONE = 0x0,
+    FIRST = 0x1 << 0,
+    SECOND = 0x1 << 1,
+    THIRD = 0x1 << 2,
 };
 
 safe_union SafeUnionBar {
@@ -45,6 +53,9 @@ safe_union SafeUnionBar {
     string d;
     float e;
     double f;
+    bitfield<FooFlag> g;
+    @1.1::Value h;
+    uint16_t i;
 };
 
 struct ArrayFoo {

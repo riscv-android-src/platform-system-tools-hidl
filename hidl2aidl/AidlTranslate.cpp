@@ -139,24 +139,38 @@ static void namedTypeTranslation(Formatter& out, const std::set<const NamedType*
 
 static void h2aScalarChecks(Formatter& out, const Type& type, const std::string& inputAccess,
                             AidlBackend backend) {
-    static const std::map<ScalarType::Kind, size_t> kSignedMaxSize{
-            {ScalarType::KIND_UINT8, std::numeric_limits<int8_t>::max()},
-            {ScalarType::KIND_INT16, std::numeric_limits<int32_t>::max()},
-            {ScalarType::KIND_UINT32, std::numeric_limits<int32_t>::max()},
-            {ScalarType::KIND_UINT64, std::numeric_limits<int64_t>::max()}};
+    static const std::map<ScalarType::Kind, std::pair<std::string, size_t>> kSignedMaxSize{
+            {ScalarType::KIND_UINT8,
+             {"std::numeric_limits<int8_t>::max()", std::numeric_limits<int8_t>::max()}},
+            {ScalarType::KIND_UINT16, {"", 0}},
+            {ScalarType::KIND_INT16, {"", 0}},
+            {ScalarType::KIND_UINT32,
+             {"std::numeric_limits<int32_t>::max()", std::numeric_limits<int32_t>::max()}},
+            {ScalarType::KIND_UINT64,
+             {"std::numeric_limits<int64_t>::max()", std::numeric_limits<int64_t>::max()}}};
     const ScalarType* scalarType = type.resolveToScalarType();
     if (scalarType != nullptr && !type.isEnum()) {
         const auto& it = kSignedMaxSize.find(scalarType->getKind());
+        // *int16_t is a special case for both HIDL and AIDL. For uint16_t, checks are only
+        // needed in the Java backend.
+        if (backend != AidlBackend::JAVA && scalarType->getKind() == ScalarType::KIND_UINT16) {
+            return;
+        }
         if (it != kSignedMaxSize.end()) {
             out << "// FIXME This requires conversion between signed and unsigned. Change this if "
                    "it doesn't suit your needs.\n";
-            if (scalarType->getKind() == ScalarType::KIND_INT16) {
-                // AIDL uses an unsigned 16-bit integer(char16_t), so this is signed to unsigned.
+            if (scalarType->getKind() == ScalarType::KIND_UINT16 ||
+                scalarType->getKind() == ScalarType::KIND_INT16) {
+                // HIDL uses a signed 16-bit char in Java for uint16_t and int16_t
+                // AIDL uses an unsigned 16-bit char/char16_t, so this is signed to unsigned.
                 out << "if (" << inputAccess << " < 0) {\n";
             } else {
                 std::string affix = (scalarType->getKind() == ScalarType::KIND_UINT64) ? "L" : "";
-                out << "if (" << inputAccess << " > " << it->second << affix << " || "
-                    << inputAccess << " < 0) {\n";
+                std::string limit = (backend == AidlBackend::JAVA)
+                                            ? std::to_string(it->second.second) + affix
+                                            : it->second.first;
+                out << "if (" << inputAccess << " > " << limit << " || " << inputAccess
+                    << " < 0) {\n";
             }
             if (backend == AidlBackend::JAVA) {
                 out.indent([&] {
@@ -202,6 +216,9 @@ static std::string wrapCppSource(const std::string& payload, const Type& type, c
                                  AidlBackend backend) {
     if (type.isString()) {
         return wrapToString16(payload, backend);
+    } else if (type.isBitField()) {
+        return wrapStaticCast(payload, *static_cast<const BitFieldType&>(type).getElementEnumType(),
+                              fqName, backend);
     } else {
         return wrapStaticCast(payload, type, fqName, backend);
     }
@@ -276,14 +293,20 @@ static void simpleTranslation(Formatter& out, const FieldWithVersion& field,
                               const CompoundType* parent, AidlBackend backend) {
     std::string inputAccess = "in." + field.fullName;
     if (backend == AidlBackend::JAVA) {
+        // HIDL uses short(signed) in the Java backend for uint16_t and int16_t
+        // AIDL uses char which is unsigned. This assignment needs a cast.
+        std::string cast;
+        if (AidlHelper::getAidlType(field.field->type(), parent->fqName()) == "char") {
+            cast = "(char) ";
+        }
         if (parent->style() == CompoundType::STYLE_STRUCT) {
             h2aScalarChecks(out, field.field->type(), inputAccess, backend);
-            out << "out." << field.field->name() << " = " << inputAccess << ";\n";
+            out << "out." << field.field->name() << " = " << cast << inputAccess << ";\n";
         } else {
             inputAccess += "()";
             h2aScalarChecks(out, field.field->type(), inputAccess, backend);
-            out << "out.set" << StringHelper::Capitalize(field.fullName) << "(" << inputAccess
-                << ");\n";
+            out << "out.set" << StringHelper::Capitalize(field.fullName) << "(" << cast
+                << inputAccess << ");\n";
         }
     } else {
         if (parent->style() == CompoundType::STYLE_STRUCT) {
@@ -305,13 +328,12 @@ static void simpleTranslation(Formatter& out, const FieldWithVersion& field,
 static void h2aFieldTranslation(Formatter& out, const std::set<const NamedType*>& namedTypes,
                                 const CompoundType* parent, const FieldWithVersion& field,
                                 AidlBackend backend) {
-    // TODO(b/158489355) Need to support and validate more types like arrays/vectors.
-    if (field.field->type().isNamedType()) {
+    if (field.field->type().isNamedType() && !field.field->type().isEnum()) {
         namedTypeTranslation(out, namedTypes, field, parent, backend);
     } else if (field.field->type().isArray() || field.field->type().isVector()) {
         containerTranslation(out, field, parent, backend);
     } else if (field.field->type().isEnum() || field.field->type().isScalar() ||
-               field.field->type().isString()) {
+               field.field->type().isString() || field.field->type().isBitField()) {
         simpleTranslation(out, field, parent, backend);
     } else {
         AidlHelper::notes() << "An unhandled type was found in translation: "
@@ -368,13 +390,15 @@ static void emitCppTranslateHeader(
         const std::map<const NamedType*, const ProcessedCompoundType>& processedTypes,
         AidlBackend backend) {
     CHECK(backend == AidlBackend::CPP || backend == AidlBackend::NDK);
-    std::set<std::string> includes;
     Formatter out =
             coordinator.getFormatter(fqName, Coordinator::Location::DIRECT,
                                      "include/" + AidlHelper::translateHeaderFile(fqName, backend));
 
     AidlHelper::emitFileHeader(out);
+    out << "// FIXME Remove this file if you don't need to translate types in this backend.\n\n";
     out << "#pragma once\n\n";
+
+    std::set<std::string> includes = {"#include <limits>"};
     for (const auto& type : namedTypes) {
         const auto& it = processedTypes.find(type);
         if (it == processedTypes.end() && !type->isEnum()) {
@@ -404,6 +428,7 @@ static void emitTranslateSource(
     Formatter out = coordinator.getFormatter(fqName, Coordinator::Location::DIRECT,
                                              AidlHelper::translateSourceFile(fqName, backend));
     AidlHelper::emitFileHeader(out);
+    out << "// FIXME Remove this file if you don't need to translate types in this backend.\n\n";
     if (backend == AidlBackend::JAVA) {
         out << "package " << AidlHelper::getAidlPackage(fqName) + ";\n\n";
         out << "public class Translate {\n";

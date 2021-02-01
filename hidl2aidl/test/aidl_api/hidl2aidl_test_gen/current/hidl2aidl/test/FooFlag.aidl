@@ -17,10 +17,10 @@
 // later when a module using the interface is updated, e.g., Mainline modules.
 
 package hidl2aidl.test;
-@VintfStability
-parcelable VectorFoo {
-  byte[] a;
-  int[] b;
-  hidl2aidl.test.Value[] c;
-  String[] d;
+@Backing(type="int") @VintfStability
+enum FooFlag {
+  NONE = 0,
+  FIRST = 1,
+  SECOND = 2,
+  THIRD = 4,
 }
